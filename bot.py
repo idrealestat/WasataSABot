@@ -194,12 +194,8 @@ async def start(update: Update, context):
 async def handle_message(update: Update, context):
     user_message = update.message.text
 
-    # فحص الأسئلة غير العقارية
-    if is_non_real_estate_question(user_message):
-        await update.message.reply_text(
-            "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
-        )
-        return
+    # تم إزالة الفحص المسبق للأسئلة غير العقارية
+    # سيتم تمرير جميع الأسئلة إلى الذكاء الاصطناعي، وهو الذي سيقرر
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
