@@ -1,26 +1,217 @@
 import os
 import logging
+import sqlite3
+import csv
+import io
+import asyncio
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram import Update, ParseMode
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 
-# تحميل المتغيرات البيئية
+# ======================= تحميل المتغيرات البيئية =======================
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 if not TELEGRAM_TOKEN or not GROQ_API_KEY or not GOOGLE_API_KEY:
     raise ValueError("❌ تأكد من وجود TELEGRAM_BOT_TOKEN و GROQ_API_KEY و GOOGLE_API_KEY في ملف .env")
 
-# إعداد عميلين
+if ADMIN_ID == 0:
+    print("⚠️ تحذير: ADMIN_ID غير مضبوط. لن تعمل أوامر /broadcast و /stats و /top و /users و /export.")
+
+# ======================= إعداد العملاء =======================
 client_groq = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
 client_gemini = OpenAI(api_key=GOOGLE_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ======================= البرومبت الكامل (منسوخ حرفياً مع الإضافة المطلوبة) =======================
+# ======================= قاعدة البيانات =======================
+DB_PATH = "bot_data.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        last_activity TEXT,
+        total_messages INTEGER DEFAULT 0
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS questions (
+        question_text TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 1,
+        last_asked TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS keywords (
+        keyword TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 1
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS rejections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question_text TEXT,
+        timestamp TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS conversation_context (
+        user_id INTEGER PRIMARY KEY,
+        last_question TEXT,
+        last_suggestion TEXT,
+        last_question_time TEXT
+    )''')
+    conn.commit()
+    conn.close()
+
+def get_db_connection():
+    return sqlite3.connect(DB_PATH)
+
+# ======================= دوال قاعدة البيانات =======================
+def save_user(user_id, username, first_name):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT OR IGNORE INTO users (user_id, username, first_name, last_activity, total_messages)
+                 VALUES (?, ?, ?, ?, 0)''', (user_id, username, first_name, now))
+    c.execute('''UPDATE users SET last_activity = ?, total_messages = total_messages + 1
+                 WHERE user_id = ?''', (now, user_id))
+    conn.commit()
+    conn.close()
+
+def get_last_activity(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT last_activity FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def update_last_activity(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute("UPDATE users SET last_activity = ? WHERE user_id = ?", (now, user_id))
+    conn.commit()
+    conn.close()
+
+def save_question(question_text):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT INTO questions (question_text, count, last_asked)
+                 VALUES (?, 1, ?) ON CONFLICT(question_text) DO UPDATE SET
+                 count = count + 1, last_asked = excluded.last_asked''', (question_text, now))
+    conn.commit()
+    conn.close()
+
+def save_keywords(keywords_list):
+    conn = get_db_connection()
+    c = conn.cursor()
+    for kw in keywords_list:
+        if len(kw) < 2:
+            continue
+        c.execute('''INSERT INTO keywords (keyword, count) VALUES (?, 1)
+                     ON CONFLICT(keyword) DO UPDATE SET count = count + 1''', (kw,))
+    conn.commit()
+    conn.close()
+
+def save_rejection(question_text):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT INTO rejections (question_text, timestamp) VALUES (?, ?)''', (question_text, now))
+    conn.commit()
+    conn.close()
+
+def save_context(user_id, last_question, last_suggestion):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT OR REPLACE INTO conversation_context (user_id, last_question, last_suggestion, last_question_time)
+                 VALUES (?, ?, ?, ?)''', (user_id, last_question, last_suggestion, now))
+    conn.commit()
+    conn.close()
+
+def get_context(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''SELECT last_question, last_suggestion, last_question_time FROM conversation_context
+                 WHERE user_id = ?''', (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"last_question": row[0], "last_suggestion": row[1], "last_question_time": row[2]}
+    return None
+
+def clear_context(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''DELETE FROM conversation_context WHERE user_id = ?''', (user_id,))
+    conn.commit()
+    conn.close()
+
+# ======================= دوال الإحصائيات =======================
+def get_stats():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+    week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+    c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (week_ago,))
+    active_users = c.fetchone()[0]
+    c.execute("SELECT question_text, count FROM questions ORDER BY count DESC LIMIT 5")
+    top_questions = c.fetchall()
+    c.execute("SELECT COUNT(*) FROM rejections")
+    total_rejections = c.fetchone()[0]
+    c.execute("SELECT SUM(total_messages) FROM users")
+    total_messages = c.fetchone()[0] or 0
+    conn.close()
+    rejection_rate = (total_rejections / total_messages * 100) if total_messages > 0 else 0
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "top_questions": top_questions,
+        "total_rejections": total_rejections,
+        "rejection_rate": round(rejection_rate, 2),
+        "total_messages": total_messages
+    }
+
+def get_top_keywords(limit=10):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT keyword, count FROM keywords ORDER BY count DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_users():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, first_name, last_activity, total_messages FROM users")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_questions():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT question_text, count, last_asked FROM questions ORDER BY count DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_rejections():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT question_text, timestamp FROM rejections ORDER BY timestamp DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# ======================= البرومبت الكامل (مع التعديل السياقي) =======================
 SYSTEM_PROMPT = """
 أنت **"خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 🔴 القاعدة الصفرية (الدور المطلق الذي لا يُبطل بأي حال):
@@ -93,18 +284,20 @@ SYSTEM_PROMPT = """
 - لا تختلق أسماء أو يوزرات أو تواريخ أو أي تفاصيل لمصادر غير رسمية. إن لم تتمكن من الوصول، فاعترف بعدم قدرتك على الوصول ولا تلفق.
 - استخدم جدولاً للمقارنات أو الأرقام إن لزم الأمر.
 - أنهِ كل إجابة بـ "خلاصة:" تعيد فيها رؤوس النقاط الأساسية.
-- إذا كان السؤال يتعلق بالعقار أو التملك أو البيع أو الشراء أو الإيجار أو الترخيص أو الأنظمة العقارية في السعودية، فهو سؤال عقاري ويجب الإجابة عليه 
-- أسئلة تملك غير السعوديين (الأجانب ، الأجنبي ، الدبلماسي ، الخليجي) للعقار في السعودية هي أسئلة عقارية ويجب الإجابة عليها، ولا تعتبر سياسية أو غير عقارية..
-- لا تجب عن أي سؤال غير عقاري متعلق بالسعودية الا ما تم تحديده بالنقطتين السابقتين . إذا ورد سؤال خارج هذا النطاق، قل:
-"أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
-- عند بداية كل رد عد واقرأ البرمبت من جديد قبل الاجابة على كل سؤال جديد
-- اقفل الرد في الجلسه عن الاجابه عن اي سؤال غير عقاري واعتذر عن الرد
+🔴 قاعدة التصنيف النهائية (مبنية على الكلمات المفتاحية والمصادر):
+- المرجع النهائي للإجابة هو جميع المصادر المعتمدة المذكورة أعلاه (النوعين: الرسمية والميدانية، والبالغ عددها 12 مصدراً)، وليس فقط بعضها.
+- الكلمات المفتاحية العقارية التي تدل على أن السؤال عقاري هي: 
+(عقار، تملك، شراء، بيع، إيجار، استئجار، سكن، منزل، فيلا، شقة، أرض، مزرعة، مكتب، محل، مستودع، سعر، متر، مساحة، مقدم، قسط، تمويل، رهن، قرض، عمولة، رسوم، ضريبة، صك، عقد، تسجيل، نقل ملكية، إفراغ، توثيق، ترخيص، رخصة، موثوق، وسيط عقاري، هيئة العقار، إيجار، سكني، البلدية، الأنظمة، الشروط، اللوائح، تشطيب، مفروش، عمر العقار، الاستثمار العقاري، دخل إيجاري، إعادة البيع، المطور العقاري، حي، مخطط، بناء، استشارة، منصة، مواقف، حديقة، مسبح، ملحق، بدروم، دور، صالة، عرض، طلب، منطقة، مسطح، عميل، زبون، أجنبي، خليجي، وافد، دبلوماسي، مستفيد، إعلان، لوحة، فندق، أو أي مرادف أو مشتق لهذه الكلمات).
+- إذا احتوى سؤال المستخدم على واحدة أو أكثر من هذه الكلمات المفتاحية، أو كان الاستفسار عن منطقة أو حي لغرض السكن أو الشراء، أو كان يطلب حكماً شرعياً أو نظامياً متعلقاً بالعقار: اعتبره سؤالاً عقارياً، وابحث عن إجابته في المصادر المحددة، وأجِب عليه فوراً باستخدام المصادر المحددة.
+- إذا لم يحتوي السؤال على أي من هذه الكلمات المفتاحية، ولم يكن له أي علاقة سياقية بالعقار (مثل أسئلة السياسة العامة، التاريخ، الطبخ، الرياضة، أو العلوم)، أو لم تجد له إجابة في المصادر المحددة: اعتذر فوراً بالجملة الثابتة: "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"، ولا تقدم أي شرح إضافي.
+- تنبيه حاسم: كلمات مثل (خليجي، أجنبي، وافد، دبلوماسي، عميل، زبون، مستفيد) هي أوصاف للجنسية أو العلاقة وليست ممنوعة، ولا تؤثر على التصنيف. يتم تصنيف السؤال بناءً على وجود الكلمات المفتاحية العقارية (مثل: تملك، شراء، أرض، عقار، سكن) وليس بناءً على هذه الأوصاف.
+- القاعدة السياقية: إذا أجاب المستخدم بكلمة "نعم" أو "أريد" أو "نعم أريد" أو "تفضل" أو ما يشابهها، وكان هذا الرد يأتي بعد اقتراح منك مباشرة (مثل "هل تريد معرفة الشروط والإجراءات؟")، فهذا يعني أن المستخدم يطلب التفاصيل الكاملة التي وعدت بها في الاقتراح السابق. في هذه الحالة، قدّم التفاصيل الكاملة (الشروط، الإجراءات، الخطوات، المساحات، الضرائب، التنبيهات، إلخ) دون أن تطلب تأكيداً إضافياً.
 عند بدء التشغيل فقط، قل بالضبط ودون أي مقدمة:
 "تفضل: هل لديك اي سؤال عقاري ؟"
 :ًفي نهاية كل إجابة على سؤال فقط (بعد الاقتراح الختامي)، أرسل حرفيا
 """
 
-# ======================= التذييل الإجباري (سيتم إلحاقه في كل رد) =======================
+# ======================= التذييل =======================
 FOOTER = """
 
 -------
@@ -114,38 +307,11 @@ https://linktr.ee/sultan.al3siry
 **(كدعم معلوماتي وتطبيقي للوسطاء العقاريين من خلال المصادر الرسمية، وليس استشارة استثمارية أو قانونية أو ترخيصاً. الوسيط هو المسؤول الوحيد عن امتثال أعماله للأنظمة والتشريعات السعودية)**
 """
 
-# ======================= قائمة الكلمات الممنوعة =======================
-NON_REAL_ESTATE_KEYWORDS = [
-    "جالوت", "داود", "طالوت", "نبي", "رسول", "قصة تاريخ", "معركة",
-    "طبخ", "وصفة", "أكل", "طعام", "مطبخ", "رياضة", "كرة قدم", "مباراة",
-    "سياسة", "انتخابات", "رئيس", "وزير", "حكومة", "فيلم", "مسلسل", "ممثل",
-    "مغني", "أغنية", "موسيقى", "فن", "رسم", "شعر", "أدب", "رواية",
-    "طب", "دواء", "مرض", "مستشفى", "علاج", "تكنولوجيا", "برمجة",
-    "ألعاب فيديو", "سيارة", "طيران", "سفر", "سياحة", "حيوان",
-    "نبات", "فضاء", "كوكب", "نجم", "قمر", "بحر", "علم", "كيمياء", "فيزياء",
-    "رياضيات", "جغرافيا", "لغات", "ترجمة", "كتاب", "مكتبة", "جامعة", "مدرسة",
-    "تعليم", "دراسة", "امتحان", "شهادة", "وظيفة", "عمل", "تجارة", "بورصة",
-    "ذهب", "فضة", "نفط", "غاز", "طاقة", "كهرباء", "ماء",
-    "توقف", "تجنب", "تعديل البرومبت", "تغيير الدور", "تحديث التعليمات", "مؤقتاً",
-    "تاريخ", "حضارة", "إمبراطورية", "صحابي", "قرآن", "سورة"
-]
-
-def is_non_real_estate_question(text: str) -> bool:
-    text_lower = text.lower()
-    for keyword in NON_REAL_ESTATE_KEYWORDS:
-        if keyword in text_lower:
-            return True
-    return False
-
-# ======================= دالة الاتصال بالذكاء الاصطناعي =======================
+# ======================= دوال الذكاء الاصطناعي =======================
 def get_ai_response(user_message: str) -> str:
-    """
-    ترسل السؤال إلى Groq أو Gemini حسب الطول، مع احتياطي.
-    """
     try:
-        # إذا كان السؤال طويلاً (> 3000 حرف)، استخدم Gemini مباشرة
         if len(user_message) > 3000:
-            print("📤 باستخدام Google Gemini (سياق كبير)...")
+            logger.info("📤 باستخدام Google Gemini (سياق كبير)...")
             response = client_gemini.chat.completions.create(
                 model="gemini-2.5-flash",
                 messages=[
@@ -157,8 +323,7 @@ def get_ai_response(user_message: str) -> str:
             )
             return response.choices[0].message.content
 
-        # حاول باستخدام Groq أولاً
-        print("⚡ باستخدام Groq (سرعة فائقة)...")
+        logger.info("⚡ باستخدام Groq (سرعة فائقة)...")
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -171,8 +336,7 @@ def get_ai_response(user_message: str) -> str:
         return response.choices[0].message.content
 
     except Exception as e:
-        # في حال فشل Groq، استخدم Gemini كاحتياطي
-        print(f"⚠️ فشل Groq: {e}. التبديل إلى Google Gemini...")
+        logger.warning(f"⚠️ فشل Groq: {e}. التبديل إلى Google Gemini...")
         try:
             response = client_gemini.chat.completions.create(
                 model="gemini-2.5-flash",
@@ -188,36 +352,235 @@ def get_ai_response(user_message: str) -> str:
             return f"❌ فشل الاتصال بجميع الخدمات: {e2}"
 
 # ======================= دوال البوت =======================
-async def start(update: Update, context):
-    await update.message.reply_text("تفضل: هل لديك اي سؤال عقاري ؟")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    save_user(user.id, user.username, user.first_name)
+    
+    # جلب عدد المستخدمين
+    stats = get_stats()
+    total_users = stats['total_users']
+    now = datetime.now().strftime("%Y-%m-%d")
+    
+    welcome_msg = f"""
+🏠 **مرحباً بك في بوت الخبير العقاري!**
 
-async def handle_message(update: Update, context):
-    user_message = update.message.text
+👥 **عدد المستخدمين الحالي:** {total_users} مستخدم
+📊 **آخر تحديث:** {now}
 
-    # تم إزالة الفحص المسبق للأسئلة غير العقارية
-    # سيتم تمرير جميع الأسئلة إلى الذكاء الاصطناعي، وهو الذي سيقرر
+تفضل: هل لديك اي سؤال عقاري ؟
+"""
+    await update.message.reply_text(welcome_msg, parse_mode=ParseMode.MARKDOWN)
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    user_message = update.message.text.strip()
+
+    # تسجيل المستخدم وتحديث آخر نشاط
+    save_user(user_id, user.username, user.first_name)
+    
+    # التحقق من فترة الانقطاع لعرض الهيدر
+    last_activity = get_last_activity(user_id)
+    show_header = False
+    if last_activity:
+        try:
+            last_time = datetime.fromisoformat(last_activity)
+            time_diff = datetime.now() - last_time
+            if time_diff.total_seconds() > 7200:  # أكثر من ساعتين
+                show_header = True
+        except:
+            pass
+    # تحديث آخر نشاط بعد التحقق
+    update_last_activity(user_id)
+
+    # تسجيل السؤال والإحصائيات
+    save_question(user_message)
+    keywords = [word for word in user_message.split() if len(word) > 2]
+    save_keywords(keywords)
+
+    # ========== التحقق من السياق (الأسئلة السياقية) ==========
+    context_data = get_context(user_id)
+    if context_data:
+        last_suggestion = context_data.get("last_suggestion")
+        last_question_time = context_data.get("last_question_time")
+        if last_suggestion and last_question_time:
+            try:
+                time_diff = datetime.now() - datetime.fromisoformat(last_question_time)
+                if time_diff.total_seconds() < 300:  # 5 دقائق
+                    yes_words = ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل", "اوكي", "ok", "yes", "نعم اريد", "نعم ابغى", "حسناً", "حسنا"]
+                    if any(word in user_message.lower() for word in yes_words):
+                        detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة (الشروط، الإجراءات، الخطوات، المساحات، الضرائب، التنبيهات، إلخ). قدّم الإجابة كاملة دون اختصار."
+                        reply = get_ai_response(detailed_prompt)
+                        if FOOTER.strip() not in reply.strip():
+                            reply = reply + FOOTER
+                        await update.message.reply_text(reply)
+                        clear_context(user_id)
+                        return
+            except:
+                pass
+
+    # ========== الرد العادي ==========
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        
-        # الحصول على الرد من الذكاء الاصطناعي
         reply = get_ai_response(user_message)
+
+        # التحقق مما إذا كان الرد اعتذاراً
+        is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in reply
         
-        # 🔴 إلحاق التذييل إجبارياً (إذا لم يكن موجوداً بالفعل)
+        # إذا كان اعتذاراً، نسجل الرفض ولا نضيف هيدر
+        if is_apology:
+            save_rejection(user_message)
+            # نرسل الرد دون أي إضافات (اعتذار جاف)
+            await update.message.reply_text(reply)
+            return
+
+        # الرد العادي (ليس اعتذاراً)
         if FOOTER.strip() not in reply.strip():
             reply = reply + FOOTER
-        
-        await update.message.reply_text(reply)
-        
+
+        # حفظ الاقتراح الأخير (للتتبع السياقي)
+        suggestion = ""
+        if "هل تريد" in reply or "هل لديك" in reply:
+            lines = reply.split("\n")
+            for line in reversed(lines):
+                if "هل تريد" in line or "هل لديك" in line:
+                    suggestion = line
+                    break
+            if suggestion:
+                save_context(user_id, user_message, suggestion)
+
+        # إذا كان المستخدم منقطعاً أكثر من ساعتين، نضيف الهيدر قبل الرد
+        if show_header:
+            stats = get_stats()
+            total_users = stats['total_users']
+            now = datetime.now().strftime("%Y-%m-%d")
+            header = f"""
+🏠 **مرحباً بعودتك إلى بوت الخبير العقاري!**
+
+👥 **عدد المستخدمين الحالي:** {total_users} مستخدم
+📊 **آخر تحديث:** {now}
+
+"""
+            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN)
+        else:
+            await update.message.reply_text(reply)
+
     except Exception as e:
+        logger.error(f"❌ خطأ في handle_message: {e}")
         await update.message.reply_text(f"❌ حدث خطأ تقني: {e}")
 
-def main():
+# ======================= أوامر الإحصائيات والمقاييس =======================
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and ADMIN_ID != 0:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+        return
+    stats = get_stats()
+    top_q = "\n".join([f"- {q[0]}: {q[1]} مرة" for q in stats["top_questions"]]) if stats["top_questions"] else "لا توجد أسئلة مسجلة."
+    msg = f"""
+📊 **إحصائيات البوت العقاري**
+
+👥 **إجمالي المستخدمين:** {stats['total_users']}
+🟢 **نشطاء آخر 7 أيام:** {stats['active_users']}
+💬 **إجمالي الرسائل:** {stats['total_messages']}
+🚫 **حالات الرفض:** {stats['total_rejections']}
+📉 **معدل الرفض:** {stats['rejection_rate']}%
+
+🔥 **أكثر 5 أسئلة تكراراً:**
+{top_q}
+"""
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and ADMIN_ID != 0:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+        return
+    keywords = get_top_keywords(10)
+    if not keywords:
+        await update.message.reply_text("لا توجد كلمات مفتاحية مسجلة حتى الآن.")
+        return
+    msg = "🔑 **أكثر 10 كلمات مفتاحية استخداماً:**\n" + "\n".join([f"- {kw[0]}: {kw[1]} مرة" for kw in keywords])
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and ADMIN_ID != 0:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+        return
+    users = get_all_users()
+    if not users:
+        await update.message.reply_text("لا يوجد مستخدمون مسجلون.")
+        return
+    msg = f"👥 **إجمالي المستخدمين:** {len(users)}\n\n"
+    for u in users[:20]:
+        username = u[1] or "بدون اسم"
+        first_name = u[2] or ""
+        msg += f"- @{username} ({first_name}) - رسائل: {u[4]}\n"
+    if len(users) > 20:
+        msg += f"\n... و {len(users)-20} مستخدمين آخرين."
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and ADMIN_ID != 0:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("❗ استخدم: /broadcast النص الذي تريد نشره")
+        return
+    broadcast_text = " ".join(args)
+    users = get_all_users()
+    if not users:
+        await update.message.reply_text("لا يوجد مستخدمون لإرسال الرسالة لهم.")
+        return
+    sent_count = 0
+    failed_count = 0
+    for u in users:
+        try:
+            await context.bot.send_message(chat_id=u[0], text=f"📢 **إعلان من المسؤول:**\n\n{broadcast_text}", parse_mode=ParseMode.MARKDOWN)
+            sent_count += 1
+        except Exception as e:
+            logger.warning(f"فشل إرسال لـ {u[0]}: {e}")
+            failed_count += 1
+        await asyncio.sleep(0.05)
+    await update.message.reply_text(f"✅ تم الإرسال بنجاح لـ {sent_count} مستخدم.\n❌ فشل الإرسال لـ {failed_count} مستخدم.")
+
+async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and ADMIN_ID != 0:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+        return
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["النوع", "المعرف", "الاسم", "القيمة", "التكرار", "آخر تحديث"])
+    users = get_all_users()
+    for u in users:
+        writer.writerow(["مستخدم", u[0], u[1] or u[2] or "", u[3], u[4], u[3]])
+    questions = get_all_questions()
+    for q in questions:
+        writer.writerow(["سؤال", "", "", q[0], q[1], q[2]])
+    rejections = get_all_rejections()
+    for r in rejections:
+        writer.writerow(["رفض", "", "", r[0], "", r[1]])
+    output.seek(0)
+    await update.message.reply_document(document=io.BytesIO(output.getvalue().encode('utf-8')), filename="bot_export.csv")
+
+# ======================= التشغيل =======================
+async def main():
+    init_db()
+    logger.info("✅ قاعدة البيانات جاهزة.")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("top", top_keywords_command))
+    app.add_handler(CommandHandler("users", users_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("export", export_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ البوت العقاري يعمل بنظام ثنائي (Groq + Gemini Fallback) مع تذييل إجباري...")
+    logger.info("✅ البوت العقاري يعمل بنظام ثنائي (Groq + Gemini Fallback) مع تذييل إجباري وقاعدة بيانات متقدمة...")
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
