@@ -6,7 +6,8 @@ import io
 import asyncio
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from telegram import Update, ParseMode
+from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 
@@ -211,7 +212,7 @@ def get_all_rejections():
     conn.close()
     return rows
 
-# ======================= البرومبت الكامل (مع التعديل السياقي) =======================
+# ======================= البرومبت الكامل =======================
 SYSTEM_PROMPT = """
 أنت **"خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 🔴 القاعدة الصفرية (الدور المطلق الذي لا يُبطل بأي حال):
@@ -356,7 +357,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user.id, user.username, user.first_name)
     
-    # جلب عدد المستخدمين
     stats = get_stats()
     total_users = stats['total_users']
     now = datetime.now().strftime("%Y-%m-%d")
@@ -376,29 +376,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     user_message = update.message.text.strip()
 
-    # تسجيل المستخدم وتحديث آخر نشاط
     save_user(user_id, user.username, user.first_name)
     
-    # التحقق من فترة الانقطاع لعرض الهيدر
     last_activity = get_last_activity(user_id)
     show_header = False
     if last_activity:
         try:
             last_time = datetime.fromisoformat(last_activity)
             time_diff = datetime.now() - last_time
-            if time_diff.total_seconds() > 7200:  # أكثر من ساعتين
+            if time_diff.total_seconds() > 7200:
                 show_header = True
         except:
             pass
-    # تحديث آخر نشاط بعد التحقق
     update_last_activity(user_id)
 
-    # تسجيل السؤال والإحصائيات
     save_question(user_message)
     keywords = [word for word in user_message.split() if len(word) > 2]
     save_keywords(keywords)
 
-    # ========== التحقق من السياق (الأسئلة السياقية) ==========
     context_data = get_context(user_id)
     if context_data:
         last_suggestion = context_data.get("last_suggestion")
@@ -406,7 +401,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if last_suggestion and last_question_time:
             try:
                 time_diff = datetime.now() - datetime.fromisoformat(last_question_time)
-                if time_diff.total_seconds() < 300:  # 5 دقائق
+                if time_diff.total_seconds() < 300:
                     yes_words = ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل", "اوكي", "ok", "yes", "نعم اريد", "نعم ابغى", "حسناً", "حسنا"]
                     if any(word in user_message.lower() for word in yes_words):
                         detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة (الشروط، الإجراءات، الخطوات، المساحات، الضرائب، التنبيهات، إلخ). قدّم الإجابة كاملة دون اختصار."
@@ -419,26 +414,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-    # ========== الرد العادي ==========
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         reply = get_ai_response(user_message)
 
-        # التحقق مما إذا كان الرد اعتذاراً
         is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in reply
         
-        # إذا كان اعتذاراً، نسجل الرفض ولا نضيف هيدر
         if is_apology:
             save_rejection(user_message)
-            # نرسل الرد دون أي إضافات (اعتذار جاف)
             await update.message.reply_text(reply)
             return
 
-        # الرد العادي (ليس اعتذاراً)
         if FOOTER.strip() not in reply.strip():
             reply = reply + FOOTER
 
-        # حفظ الاقتراح الأخير (للتتبع السياقي)
         suggestion = ""
         if "هل تريد" in reply or "هل لديك" in reply:
             lines = reply.split("\n")
@@ -449,7 +438,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if suggestion:
                 save_context(user_id, user_message, suggestion)
 
-        # إذا كان المستخدم منقطعاً أكثر من ساعتين، نضيف الهيدر قبل الرد
         if show_header:
             stats = get_stats()
             total_users = stats['total_users']
