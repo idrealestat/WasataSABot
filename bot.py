@@ -556,7 +556,7 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_document(document=io.BytesIO(output.getvalue().encode('utf-8')), filename="bot_export.csv")
 
 # ======================= التشغيل =======================
-async def main():
+def main():
     init_db()
     logger.info("✅ قاعدة البيانات جاهزة.")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -571,4 +571,4 @@ async def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
