@@ -220,28 +220,75 @@ def get_all_rejections():
     conn.close()
     return rows
 
-# ======================= البحث في يوتيوب (مع أولوية للقنوات الرسمية) =======================
+# ======================= البحث في يوتيوب (مع أولوية للقنوات المحددة) =======================
 
-# قائمة معرفات القنوات الرسمية (رتبة أولى)
-# يمكنك تحديث هذه القائمة بإضافة معرفات القنوات الرسمية مثل:
-# الهيئة العامة للعقار، وزارة الإسكان، منصة إيجار، منصة سكني، إلخ.
-OFFICIAL_CHANNELS = [
-    # "UCxxxxxxxxxxxxxxxxx",  # مثال: قناة الهيئة العامة للعقار
-    # "UCyyyyyyyyyyyyyyyyy",  # مثال: قناة وزارة الإسكان
-    # "UCzzzzzzzzzzzzzzzzz",  # مثال: قناة منصة إيجار
+# قائمة القنوات الرسمية (باستخدام @handle)
+OFFICIAL_CHANNELS_HANDLES = [
+    "Egar.Aqar.sa1",
+    "Rega_ksa",
+    "جمعيةسكني",
+    "RERSaudi",
+    "Balady_KSA",
+    "MediaKsa",
 ]
 
-def search_youtube_channel(query, api_key, channel_id, max_results=3):
-    """البحث في قناة محددة بواسطة channel_id."""
+# قائمة القنوات الثانوية (باستخدام @handle)
+SECONDARY_CHANNELS_HANDLES = [
+    "service-sa",
+    "tahani.makkah",
+    "athmnsa",
+    "aqarappfm",
+    "hasan_ashaq",
+    "ServicesOnTheHighway",
+    "Ahmed-Alabdulkader",
+    "mawadie",
+]
+
+# قائمة الموضوعات العقارية الثابتة لتصفية البحث
+REAL_ESTATE_TOPICS = [
+    "منصة إيجار",
+    "بلدي",
+    "السجل العقاري",
+    "التسجيل العيني",
+    "عقود الوساطة",
+    "عقود التأجير",
+    "السجل العيني",
+    "ضريبة التصرفات العقارية",
+    "البورصة العقارية",
+    "الإفراغ",
+    "ناجز",
+    "الوكالات العقارية"
+]
+
+def get_channel_id_from_handle(handle, api_key):
+    """الحصول على Channel ID من @handle باستخدام YouTube API."""
     try:
         youtube = build('youtube', 'v3', developerKey=api_key)
         request = youtube.search().list(
             part='snippet',
-            q=query + " تعليمي شرح",
+            q=f"channel:{handle}",
+            type='channel',
+            maxResults=1
+        )
+        response = request.execute()
+        if response['items']:
+            return response['items'][0]['id']['channelId']
+        return None
+    except Exception as e:
+        logger.error(f"❌ خطأ في استخراج Channel ID للقناة {handle}: {e}")
+        return None
+
+def search_youtube_channel(query, api_key, channel_id, max_results=3, order='date'):
+    """البحث في قناة محددة بواسطة channel_id مع ترتيب حسب الأحدث."""
+    try:
+        youtube = build('youtube', 'v3', developerKey=api_key)
+        request = youtube.search().list(
+            part='snippet',
+            q=query,
             type='video',
             maxResults=max_results,
             channelId=channel_id,
-            order='relevance'
+            order=order
         )
         response = request.execute()
         results = []
@@ -249,22 +296,23 @@ def search_youtube_channel(query, api_key, channel_id, max_results=3):
             video_id = item['id']['videoId']
             title = item['snippet']['title']
             url = f"https://www.youtube.com/watch?v={video_id}"
-            results.append({'title': title, 'url': url})
+            published_at = item['snippet']['publishedAt']
+            results.append({'title': title, 'url': url, 'published_at': published_at})
         return results
     except Exception as e:
         logger.error(f"❌ خطأ في البحث في القناة {channel_id}: {e}")
         return []
 
-def search_youtube_general(query, api_key, max_results=3):
-    """بحث عام في يوتيوب."""
+def search_youtube_general(query, api_key, max_results=3, order='date'):
+    """بحث عام في يوتيوب مع كلمات مفتاحية محسّنة."""
     try:
         youtube = build('youtube', 'v3', developerKey=api_key)
         request = youtube.search().list(
             part='snippet',
-            q=query + " تعليمي شرح",
+            q=query,
             type='video',
             maxResults=max_results,
-            order='relevance'
+            order=order
         )
         response = request.execute()
         results = []
@@ -272,7 +320,8 @@ def search_youtube_general(query, api_key, max_results=3):
             video_id = item['id']['videoId']
             title = item['snippet']['title']
             url = f"https://www.youtube.com/watch?v={video_id}"
-            results.append({'title': title, 'url': url})
+            published_at = item['snippet']['publishedAt']
+            results.append({'title': title, 'url': url, 'published_at': published_at})
         return results
     except Exception as e:
         logger.error(f"❌ خطأ في البحث العام: {e}")
@@ -281,22 +330,42 @@ def search_youtube_general(query, api_key, max_results=3):
 def search_youtube(query, api_key, max_results=3):
     """
     البحث عن فيديوهات تعليمية:
-    1. أولاً: البحث في القنوات الرسمية (حسب قائمة OFFICIAL_CHANNELS).
-    2. ثانياً: بحث عام في يوتيوب إذا لم يتم العثور على نتائج.
+    1. أولاً: البحث في القنوات الرسمية (من قائمة OFFICIAL_CHANNELS_HANDLES).
+    2. ثانياً: البحث في القنوات الثانوية (من قائمة SECONDARY_CHANNELS_HANDLES).
+    3. ثالثاً: بحث عام في يوتيوب إذا لم يتم العثور على نتائج.
     """
     if not YOUTUBE_AVAILABLE:
         return []
 
-    # الطبقة الأولى: البحث في القنوات الرسمية
-    for channel_id in OFFICIAL_CHANNELS:
-        results = search_youtube_channel(query, api_key, channel_id, max_results)
-        if results:
-            logger.info(f"✅ تم العثور على فيديوهات في القناة الرسمية: {channel_id}")
-            return results
+    # إضافة الموضوعات الثابتة إلى كلمات البحث
+    fixed_keywords = " OR ".join(REAL_ESTATE_TOPICS)
+    search_query = f"{query} وساطة عقارية سعودية تعليمي شرح"
 
-    # الطبقة الثانية: بحث عام
-    logger.info("🔍 لم يتم العثور في القنوات الرسمية، جاري البحث العام...")
-    return search_youtube_general(query, api_key, max_results)
+    # الطبقة الأولى: البحث في القنوات الرسمية
+    for handle in OFFICIAL_CHANNELS_HANDLES:
+        channel_id = get_channel_id_from_handle(handle, api_key)
+        if channel_id:
+            results = search_youtube_channel(search_query, api_key, channel_id, max_results, order='date')
+            if results:
+                logger.info(f"✅ تم العثور على فيديوهات في القناة الرسمية: {handle}")
+                return results
+        else:
+            logger.warning(f"⚠️ لم نتمكن من استخراج Channel ID للقناة: {handle}")
+
+    # الطبقة الثانية: البحث في القنوات الثانوية
+    for handle in SECONDARY_CHANNELS_HANDLES:
+        channel_id = get_channel_id_from_handle(handle, api_key)
+        if channel_id:
+            results = search_youtube_channel(search_query, api_key, channel_id, max_results, order='date')
+            if results:
+                logger.info(f"✅ تم العثور على فيديوهات في القناة الثانوية: {handle}")
+                return results
+        else:
+            logger.warning(f"⚠️ لم نتمكن من استخراج Channel ID للقناة: {handle}")
+
+    # الطبقة الثالثة: بحث عام
+    logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
+    return search_youtube_general(search_query, api_key, max_results, order='date')
 
 # ======================= البرومبت الكامل مع المصادر التشريعية المضافة =======================
 SYSTEM_PROMPT = """
@@ -486,18 +555,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ========== البحث عن فيديوهات تعليمية ==========
     educational_keywords = [
-    # الأفعال الصريحة
-    "كيف", "طريقة", "شرح", "خطوات", "تعليم", "دليل", "إجراءات",
-    "علمني", "فهمني", "افهمني", "فهمني", "شلون", "وشلون", "كيفية",
-    "الطريقة", "الشرح", "التعليم", "الدليل", "الإجراءات",
-    "أبغى", "أريد", "عطني", "وريني", "قلي", "قولي",
-    "مراحل", "آلية", "منهجية", "سير", "عملية", "إرشادات",
-    "دربني", "عرّفني", "أرشدني", "وضح", "بيّن", "فصّل",
-    # الجذور والمعاني العامة
-    "طريقة", "اسلوب", "خطوات", "اشرح لي", "وضح لي", "قول لي", "مراحل", "إجراء", "دليل", "دروس",
-    # العامية الخليجية
-    "إيش", "ايش", "كيفي", "شلونكم", "كيفكم"
-]
+        # الأفعال الصريحة
+        "كيف", "طريقة", "شرح", "خطوات", "تعليم", "دليل", "إجراءات",
+        "علمني", "فهمني", "افهمني", "شلون", "وشلون", "كيفية",
+        "الطريقة", "الشرح", "التعليم", "الدليل", "الإجراءات",
+        "أبغى", "أريد", "عطني", "وريني", "قلي", "قولي",
+        "مراحل", "آلية", "منهجية", "سير", "عملية", "إرشادات",
+        "دربني", "عرّفني", "أرشدني", "وضح", "بيّن", "فصّل",
+        "اسلوب", "اشرح لي", "وضح لي", "قول لي", "دروس",
+        # العامية الخليجية
+        "إيش", "ايش", "كيفي", "شلونكم", "كيفكم"
+    ]
     if any(word in user_message.lower() for word in educational_keywords):
         try:
             youtube_results = search_youtube(user_message, GOOGLE_API_KEY, max_results=3)
