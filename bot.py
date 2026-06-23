@@ -100,6 +100,19 @@ def init_db():
         created_date TEXT,
         is_active INTEGER DEFAULT 0
     )''')
+    # جدول التغذية الراجعة (بلاغ، اقتراح، شكوى)
+    c.execute('''CREATE TABLE IF NOT EXISTS feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        username TEXT,
+        type TEXT,
+        message TEXT,
+        timestamp TEXT,
+        is_replied INTEGER DEFAULT 0,
+        replied_by INTEGER,
+        reply_text TEXT,
+        reply_timestamp TEXT
+    )''')
     conn.commit()
     conn.close()
 
@@ -300,6 +313,78 @@ def get_active_rule():
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
+
+# ======================= دوال التغذية الراجعة =======================
+def save_feedback(user_id, username, feedback_type, message):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT INTO feedback (user_id, username, type, message, timestamp, is_replied)
+                 VALUES (?, ?, ?, ?, ?, 0)''', (user_id, username, feedback_type, message, now))
+    conn.commit()
+    conn.close()
+
+def get_feedback_stats():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'بلاغ'")
+    reports = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'اقتراح'")
+    suggestions = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'شكوى'")
+    complaints = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM feedback WHERE is_replied = 0")
+    pending = c.fetchone()[0]
+    
+    # أكثر موضوع مكرر (تحليل بسيط بالكلمات المفتاحية)
+    c.execute("SELECT message FROM feedback")
+    messages = c.fetchall()
+    conn.close()
+    
+    # تحليل بسيط للكلمات الأكثر تكراراً
+    word_count = {}
+    keywords = ["سعر", "عقار", "وساطة", "عقد", "إيجار", "تملك", "أرض", "شقة", "فيلا", "تقييم", "يوتيوب", "شرح", "طريقة", "خطوات", "إجراءات"]
+    for msg in messages:
+        text = msg[0].lower()
+        for kw in keywords:
+            if kw in text:
+                word_count[kw] = word_count.get(kw, 0) + 1
+    
+    most_common = max(word_count.items(), key=lambda x: x[1]) if word_count else ("لا توجد", 0)
+    
+    return {
+        "reports": reports,
+        "suggestions": suggestions,
+        "complaints": complaints,
+        "pending": pending,
+        "most_common_topic": most_common[0],
+        "most_common_count": most_common[1]
+    }
+
+def get_all_feedback():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, user_id, username, type, message, timestamp, is_replied, reply_text FROM feedback ORDER BY timestamp DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def mark_feedback_replied(feedback_id, admin_id, reply_text):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''UPDATE feedback SET is_replied = 1, replied_by = ?, reply_text = ?, reply_timestamp = ?
+                 WHERE id = ?''', (admin_id, reply_text, now, feedback_id))
+    conn.commit()
+    conn.close()
+
+def get_feedback_by_id(feedback_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT user_id, message FROM feedback WHERE id = ?", (feedback_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
 
 # ======================= دوال الإحصائيات =======================
 def get_stats():
@@ -1052,6 +1137,132 @@ async def clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_
     
     await request_secret_confirmation(update, context, "clear_all_rules", {})
 
+# ======================= أوامر التغذية الراجعة (بلاغ، اقتراح، شكوى) =======================
+async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE, feedback_type: str):
+    user = update.effective_user
+    user_id = user.id
+    username = user.username or "لا يوجد"
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            f"❗ استخدم: /{feedback_type} نص رسالتك\n\n"
+            f"مثال: /{feedback_type} أتمنى إضافة خاصية كذا"
+        )
+        return
+    
+    message = " ".join(args)
+    
+    # حفظ التغذية الراجعة في قاعدة البيانات
+    save_feedback(user_id, username, feedback_type, message)
+    
+    # إرسال إشعار للمسؤول (ADMIN_ID)
+    try:
+        admin_msg = f"""
+📩 **رسالة جديدة من مستخدم:**
+
+👤 **المستخدم:** @{username} (ID: {user_id})
+📌 **النوع:** {feedback_type}
+📝 **الرسالة:**
+{message}
+
+📅 **التاريخ:** {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+للرد على هذا المستخدم، استخدم:
+`/رد {user_id} نص ردك`
+"""
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"❌ فشل إرسال إشعار للمسؤول: {e}")
+    
+    # رد للمستخدم
+    await update.message.reply_text(
+        f"✅ تم استلام {feedback_type} بنجاح. شكراً لتواصلك معنا!"
+    )
+
+async def reply_to_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and not is_admin(user.id):
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول والمدراء فقط.")
+        return
+    
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "❗ استخدم: /رد [معرف_المستخدم] [نص الرد]\n\n"
+            "مثال: /رد 123456789 شكراً على ملاحظتك"
+        )
+        return
+    
+    target_user_id = int(args[0])
+    reply_text = " ".join(args[1:])
+    
+    try:
+        # إرسال الرد للمستخدم
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"📩 **رد من المسؤول:**\n\n{reply_text}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await update.message.reply_text(f"✅ تم إرسال الرد للمستخدم {target_user_id} بنجاح.")
+        
+        # تسجيل الرد في قاعدة البيانات (اختياري)
+        # يمكننا إضافة دالة لتسجيل الردود هنا
+    except Exception as e:
+        await update.message.reply_text(f"❌ فشل إرسال الرد: {e}")
+
+async def feedback_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and not is_admin(user.id):
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول والمدراء فقط.")
+        return
+    
+    stats = get_feedback_stats()
+    msg = f"""
+📊 **إحصائيات التغذية الراجعة:**
+
+📌 **البلاغات:** {stats['reports']}
+💡 **الاقتراحات:** {stats['suggestions']}
+⚠️ **الشكاوى:** {stats['complaints']}
+⏳ **قيد الانتظار (لم يُرد عليها):** {stats['pending']}
+
+🔥 **أكثر موضوع تكرراً:** "{stats['most_common_topic']}" ({stats['most_common_count']} مرة)
+"""
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def export_feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID and not is_admin(user.id):
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول والمدراء فقط.")
+        return
+    
+    feedback_data = get_all_feedback()
+    if not feedback_data:
+        await update.message.reply_text("لا توجد رسائل تغذية راجعة مسجلة.")
+        return
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["المعرف", "معرف المستخدم", "اسم المستخدم", "النوع", "الرسالة", "التاريخ", "تم الرد", "نص الرد"])
+    
+    for row in feedback_data:
+        writer.writerow([
+            row[0],  # id
+            row[1],  # user_id
+            row[2],  # username
+            row[3],  # type
+            row[4],  # message
+            row[5],  # timestamp
+            "نعم" if row[6] == 1 else "لا",  # is_replied
+            row[7] or ""  # reply_text
+        ])
+    
+    output.seek(0)
+    await update.message.reply_document(
+        document=io.BytesIO(output.getvalue().encode('utf-8')),
+        filename="feedback_export.csv"
+    )
+
 # ======================= دوال البوت =======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1071,6 +1282,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🔒 تطمن، لا يمكن لأحد الاطلاع على محادثاتك.
 خصوصيتك أمانة في أعناقنا.
+
+📢 **للتواصل مع المسؤول:**
+- /بلاغ للإبلاغ عن مشكلة أو خطأ
+- /اقتراح لتقديم فكرة تطوير
+- /شكوى لتقديم شكوى
+
+*استخدم الأمر متبوعاً برسالتك، مثال:*
+/اقتراح أتمنى إضافة خاصية كذا
 """
     await update.message.reply_text(welcome_msg, parse_mode=ParseMode.MARKDOWN)
 
@@ -1195,6 +1414,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ خطأ في handle_message: {e}")
         await update.message.reply_text(f"❌ حدث خطأ تقني: {e}")
 
+# ======================= معالج الأوامر غير المعروفة =======================
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⚠️ **أمر غير معروف.**\n\n"
+        "📌 **الأوامر المتاحة:**\n"
+        "- /start للبدء\n"
+        "- /اقتراح لتقديم اقتراح\n"
+        "- /بلاغ للإبلاغ عن مشكلة\n"
+        "- /شكوى لتقديم شكوى\n\n"
+        "📞 للتواصل مع المسؤول: استخدم /اقتراح أو /بلاغ أو /شكوى"
+    )
+
 # ======================= أوامر الإحصائيات والمقاييس (متاحة للمدراء) =======================
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1303,6 +1534,16 @@ def main():
     # أوامر البوت العامة
     app.add_handler(CommandHandler("start", start))
     
+    # أوامر التغذية الراجعة (لجميع المستخدمين)
+    app.add_handler(CommandHandler("بلاغ", lambda u, c: feedback_command(u, c, "بلاغ")))
+    app.add_handler(CommandHandler("اقتراح", lambda u, c: feedback_command(u, c, "اقتراح")))
+    app.add_handler(CommandHandler("شكوى", lambda u, c: feedback_command(u, c, "شكوى")))
+    
+    # أوامر الرد والإحصائيات (للمسؤول والمدراء)
+    app.add_handler(CommandHandler("رد", reply_to_user_command))
+    app.add_handler(CommandHandler("تغذية", feedback_stats_command))
+    app.add_handler(CommandHandler("تصدير_تغذية", export_feedback_command))
+    
     # أوامر الإدارة (المالك الأساسي)
     app.add_handler(CommandHandler("addadmin", add_admin_command))
     app.add_handler(CommandHandler("removeadmin", remove_admin_command))
@@ -1325,6 +1566,9 @@ def main():
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("export", export_command))
+    
+    # معالج الأوامر غير المعروفة
+    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     
     # معالج الرسائل
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
