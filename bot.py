@@ -24,6 +24,7 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 if not TELEGRAM_TOKEN or not GROQ_API_KEY or not GOOGLE_API_KEY:
@@ -35,6 +36,11 @@ if ADMIN_ID == 0:
 # ======================= إعداد العملاء =======================
 client_groq = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
 client_gemini = OpenAI(api_key=GOOGLE_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+
+# عميل OpenRouter (إذا كان المفتاح متاحاً)
+client_openrouter = None
+if OPENROUTER_API_KEY:
+    client_openrouter = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -645,26 +651,37 @@ https://linktr.ee/sultan.al3siry
 **"الوسيط هو المسؤول الوحيد عن امتثال أعماله للأنظمة والتشريعات السعودية"**
 """
 
-# ======================= دوال الذكاء الاصطناعي =======================
+# ======================= دوال الذكاء الاصطناعي (مع التبديل الثلاثي والفلتر) =======================
+def is_api_error(response_text: str) -> bool:
+    """التحقق من أن الرد ليس خطأ API."""
+    error_indicators = [
+        "Error code:",
+        "API key",
+        "PERMISSION_DENIED",
+        "API_KEY_SERVICE_BLOCKED",
+        "Quota exceeded",
+        "Requested entity was not found",
+        "Resource has been exhausted",
+        "The model is temporarily unavailable",
+        "429",
+        "500",
+        "503",
+        "fشل",
+        "❌",
+        "فشل الاتصال",
+        "HTTPError",
+        "Unauthorized",
+        "Forbidden"
+    ]
+    return any(indicator in response_text for indicator in error_indicators)
+
 def get_ai_response(user_message: str) -> str:
     # محاولة جلب القاعدة النشطة من قاعدة البيانات
     active_rule = get_active_rule()
     system_prompt = active_rule if active_rule else BASE_SYSTEM_PROMPT
     
+    # ========== محاولة 1: Groq ==========
     try:
-        if len(user_message) > 3000:
-            logger.info("📤 باستخدام Google Gemini (سياق كبير)...")
-            response = client_gemini.chat.completions.create(
-                model="gemini-2.5-flash",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message}
-                ],
-                temperature=0.2,
-                max_tokens=3500
-            )
-            return response.choices[0].message.content
-
         logger.info("⚡ باستخدام Groq (سرعة فائقة)...")
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -675,13 +692,21 @@ def get_ai_response(user_message: str) -> str:
             temperature=0.2,
             max_tokens=3500
         )
-        return response.choices[0].message.content
-
+        reply = response.choices[0].message.content
+        if not is_api_error(reply):
+            logger.info("✅ Groq: رد صحيح")
+            return reply
+        else:
+            logger.warning(f"⚠️ Groq: رد يحتوي على خطأ: {reply[:200]}...")
     except Exception as e:
-        logger.warning(f"⚠️ فشل Groq: {e}. التبديل إلى Google Gemini...")
+        logger.warning(f"⚠️ فشل Groq: {e}")
+    
+    # ========== محاولة 2: OpenRouter ==========
+    if client_openrouter:
         try:
-            response = client_gemini.chat.completions.create(
-                model="gemini-2.5-flash",
+            logger.info("🔄 باستخدام OpenRouter (احتياطي)...")
+            response = client_openrouter.chat.completions.create(
+                model="google/gemini-2.5-flash",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
@@ -689,9 +714,40 @@ def get_ai_response(user_message: str) -> str:
                 temperature=0.2,
                 max_tokens=3500
             )
-            return response.choices[0].message.content
-        except Exception as e2:
-            return f"❌ فشل الاتصال بجميع الخدمات: {e2}"
+            reply = response.choices[0].message.content
+            if not is_api_error(reply):
+                logger.info("✅ OpenRouter: رد صحيح")
+                return reply
+            else:
+                logger.warning(f"⚠️ OpenRouter: رد يحتوي على خطأ: {reply[:200]}...")
+        except Exception as e:
+            logger.warning(f"⚠️ فشل OpenRouter: {e}")
+    else:
+        logger.info("⏭️ OpenRouter غير متاح (OPENROUTER_API_KEY غير مضبوط)")
+    
+    # ========== محاولة 3: Gemini (Google API) ==========
+    try:
+        logger.info("🔄 باستخدام Google Gemini (الملاذ الأخير)...")
+        response = client_gemini.chat.completions.create(
+            model="gemini-2.5-flash",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.2,
+            max_tokens=3500
+        )
+        reply = response.choices[0].message.content
+        if not is_api_error(reply):
+            logger.info("✅ Gemini: رد صحيح")
+            return reply
+        else:
+            logger.warning(f"⚠️ Gemini: رد يحتوي على خطأ: {reply[:200]}...")
+    except Exception as e:
+        logger.warning(f"⚠️ فشل Gemini: {e}")
+    
+    # ========== جميع المحاولات فشلت ==========
+    return "❌ عذراً، جميع خدمات الذكاء الاصطناعي غير متاحة حالياً. يرجى المحاولة لاحقاً."
 
 # ======================= دوال التأكيد بالرقم السري =======================
 # قاموس مؤقت لتخزين حالة طلب الرقم السري لكل مستخدم
@@ -1029,7 +1085,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keywords = [word for word in user_message.split() if len(word) > 2]
     save_keywords(keywords)
 
-    # ========== البحث عن فيديوهات تعليمية ==========
+    # ========== البحث عن فيديوهات تعليمية (YouTube) ==========
+    # هذه الميزة مستقلة تماماً عن الردود الذكية، وتستخدم Google API فقط
     educational_keywords = [
         "كيف", "طريقة", "شرح", "خطوات", "تعليم", "دليل", "إجراءات",
         "علمني", "فهمني", "افهمني", "شلون", "وشلون", "كيفية",
@@ -1040,7 +1097,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "اسلوب", "اشرح لي", "وضح لي", "قول لي", "دروس",
         "إيش", "ايش", "كيفي", "شلونكم", "كيفكم"
     ]
-    if any(word in user_message.lower() for word in educational_keywords):
+    is_educational = any(word in user_message.lower() for word in educational_keywords)
+    
+    # إذا كان السؤال تعليمياً، نبحث في YouTube مباشرة ونرسل النتائج
+    if is_educational:
         try:
             youtube_results = search_youtube(user_message, GOOGLE_API_KEY, max_results=3)
             if youtube_results:
@@ -1052,7 +1112,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except Exception as e:
             logger.warning(f"⚠️ فشل البحث عن يوتيوب: {e}")
+            # نكمل للرد العادي (Groq/OpenRouter/Gemini)
 
+    # ========== الردود الذكية (Groq → OpenRouter → Gemini) ==========
     context_data = get_context(user_id)
     if context_data:
         last_suggestion = context_data.get("last_suggestion")
@@ -1249,7 +1311,7 @@ def main():
     # معالج الرسائل
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info("✅ البوت العقاري يعمل بنظام ثنائي (Groq + Gemini Fallback) مع تذييل إجباري وقاعدة بيانات متقدمة...")
+    logger.info("✅ البوت العقاري يعمل بنظام ثلاثي (Groq → OpenRouter → Gemini) مع تذييل إجباري وقاعدة بيانات متقدمة...")
     app.run_polling()
 
 if __name__ == "__main__":
