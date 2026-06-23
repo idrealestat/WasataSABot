@@ -30,7 +30,7 @@ if not TELEGRAM_TOKEN or not GROQ_API_KEY or not GOOGLE_API_KEY:
     raise ValueError("❌ تأكد من وجود TELEGRAM_BOT_TOKEN و GROQ_API_KEY و GOOGLE_API_KEY في ملف .env")
 
 if ADMIN_ID == 0:
-    print("⚠️ تحذير: ADMIN_ID غير مضبوط. لن تعمل أوامر /broadcast و /stats و /top و /users و /export.")
+    print("⚠️ تحذير: ADMIN_ID غير مضبوط. لن تعمل أوامر /broadcast و /stats و /top و /users و /export و /addadmin.")
 
 # ======================= إعداد العملاء =======================
 client_groq = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
@@ -71,6 +71,28 @@ def init_db():
         last_question TEXT,
         last_suggestion TEXT,
         last_question_time TEXT
+    )''')
+    # جدول المدراء
+    c.execute('''CREATE TABLE IF NOT EXISTS admins (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        secret_code TEXT,
+        added_by INTEGER,
+        added_date TEXT
+    )''')
+    # جدول الإعدادات العامة (لتخزين القواعد المخصصة)
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )''')
+    # جدول القواعد المتعددة
+    c.execute('''CREATE TABLE IF NOT EXISTS custom_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule_name TEXT UNIQUE,
+        rule_text TEXT,
+        created_by INTEGER,
+        created_date TEXT,
+        is_active INTEGER DEFAULT 0
     )''')
     conn.commit()
     conn.close()
@@ -161,6 +183,109 @@ def clear_context(user_id):
     c.execute('''DELETE FROM conversation_context WHERE user_id = ?''', (user_id,))
     conn.commit()
     conn.close()
+
+def is_admin(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row is not None
+
+def get_setting(key):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT value FROM bot_settings WHERE key = ?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def set_setting(key, value):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)''', (key, value))
+    conn.commit()
+    conn.close()
+
+def delete_setting(key):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM bot_settings WHERE key = ?", (key,))
+    conn.commit()
+    conn.close()
+
+def get_all_admins():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, secret_code, added_by, added_date FROM admins")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# ======================= دوال القواعد المتعددة =======================
+def add_custom_rule(rule_name, rule_text, created_by):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT OR REPLACE INTO custom_rules (rule_name, rule_text, created_by, created_date, is_active)
+                 VALUES (?, ?, ?, ?, 0)''', (rule_name, rule_text, created_by, now))
+    conn.commit()
+    conn.close()
+
+def get_all_custom_rules():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, rule_name, rule_text, created_by, created_date, is_active FROM custom_rules")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_custom_rule(rule_name):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT rule_text FROM custom_rules WHERE rule_name = ?", (rule_name,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def update_custom_rule(rule_name, new_text):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("UPDATE custom_rules SET rule_text = ? WHERE rule_name = ?", (new_text, rule_name))
+    conn.commit()
+    conn.close()
+
+def delete_custom_rule(rule_name):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM custom_rules WHERE rule_name = ?", (rule_name,))
+    conn.commit()
+    conn.close()
+
+def delete_all_custom_rules():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM custom_rules")
+    conn.commit()
+    conn.close()
+
+def activate_rule(rule_name):
+    conn = get_db_connection()
+    c = conn.cursor()
+    # تعطيل جميع القواعد أولاً
+    c.execute("UPDATE custom_rules SET is_active = 0")
+    # تفعيل القاعدة المطلوبة
+    c.execute("UPDATE custom_rules SET is_active = 1 WHERE rule_name = ?", (rule_name,))
+    conn.commit()
+    conn.close()
+
+def get_active_rule():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT rule_text FROM custom_rules WHERE is_active = 1")
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 # ======================= دوال الإحصائيات =======================
 def get_stats():
@@ -351,8 +476,8 @@ def search_youtube(query, api_key, max_results=3):
     logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
     return search_youtube_general(search_query, api_key, max_results, order='date')
 
-# ======================= البرومبت الكامل مع التعديلات النهائية =======================
-SYSTEM_PROMPT = """
+# ======================= البرومبت الأساسي (سيتم استخدامه إذا لم توجد قاعدة مخصصة) =======================
+BASE_SYSTEM_PROMPT = """
 أنت **"خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية والتشريعية.
 
 🔴 **القاعدة الصفرية (الدور المطلق الذي لا يُبطل بأي حال):**
@@ -450,9 +575,10 @@ SYSTEM_PROMPT = """
 ---
 
 🔴 **قاعدة التقييم العقاري (قاعدة عليا حاسمة لا تُبطل):**
-إذا طلب المستخدم سعراً أو تقييماً لأي عقار (مثل: شقة، فيلا، أرض، قطعة أرض، مخطط، حي، أو أي استفسار عن قيمة مالية لعقار معين)، فهذا يُصنف حصراً كـ **"تقييم عقاري"**.
-في هذه الحالة تحديداً، **يُمنع منعاً باتاً**:
-1. استخدام أي من المصادر (سواء الرسمية أو الميدانية) لتقدير السعر.
+إذا طلب المستخدم سعراً أو تقييماً لأي عقار (مثل: شقة، فيلا، أرض، قطعة أرض، مخطط، حي، فندق، استراحة، عمارة، أو أي استفسار عن قيمة مالية لعقار معين)، فهذا يُصنف حصراً كـ **"تقييم عقاري"**.
+
+في هذه الحالة تحديداً، يُمنع منعاً باتاً:
+1. استخدام أي من المصادر الميدانية (الأرقام 14، 15، 16) لتقدير السعر أو البحث عن أسعار.
 2. تقديم أي أرقام تقريبية أو تحليل للاتجاه (ارتفاع/انخفاض).
 3. الرد بأي صيغة أخرى غير الرد الثابت التالي (بدون أي إضافات أو استثناءات):
 
@@ -495,7 +621,7 @@ _"تفضل: هل لديك اي سؤال عقاري ؟"_
 في نهاية كل إجابة على سؤال فقط (بعد الاقتراح الختامي)، أرسل حرفياً:
 """
 
-# ======================= التذييل الجديد =======================
+# ======================= التذييل =======================
 FOOTER = """
 
 -------
@@ -509,13 +635,17 @@ https://linktr.ee/sultan.al3siry
 
 # ======================= دوال الذكاء الاصطناعي =======================
 def get_ai_response(user_message: str) -> str:
+    # محاولة جلب القاعدة النشطة من قاعدة البيانات
+    active_rule = get_active_rule()
+    system_prompt = active_rule if active_rule else BASE_SYSTEM_PROMPT
+    
     try:
         if len(user_message) > 3000:
             logger.info("📤 باستخدام Google Gemini (سياق كبير)...")
             response = client_gemini.chat.completions.create(
                 model="gemini-2.5-flash",
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
                 ],
                 temperature=0.2,
@@ -527,7 +657,7 @@ def get_ai_response(user_message: str) -> str:
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
@@ -541,7 +671,7 @@ def get_ai_response(user_message: str) -> str:
             response = client_gemini.chat.completions.create(
                 model="gemini-2.5-flash",
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
                 ],
                 temperature=0.2,
@@ -550,6 +680,240 @@ def get_ai_response(user_message: str) -> str:
             return response.choices[0].message.content
         except Exception as e2:
             return f"❌ فشل الاتصال بجميع الخدمات: {e2}"
+
+# ======================= أوامر الإدارة =======================
+async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("❗ استخدم: /addadmin @username الرمز_السري")
+        return
+    
+    username = args[0].replace("@", "")
+    secret = args[1]
+    
+    try:
+        user_obj = await context.bot.get_chat(username)
+        user_id = user_obj.id
+    except:
+        await update.message.reply_text("❌ لم أجد هذا المستخدم.")
+        return
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO admins (user_id, username, secret_code, added_by, added_date)
+                 VALUES (?, ?, ?, ?, ?)''', (user_id, username, secret, user.id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    
+    await update.message.reply_text(f"✅ تم إضافة {username} كمدير بنجاح!")
+
+async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text("❗ استخدم: /removeadmin @username")
+        return
+    
+    username = args[0].replace("@", "")
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM admins WHERE username = ?", (username,))
+    conn.commit()
+    deleted = c.rowcount > 0
+    conn.close()
+    
+    if deleted:
+        await update.message.reply_text(f"✅ تم حذف {username} من قائمة المدراء.")
+    else:
+        await update.message.reply_text(f"❌ لم أجد {username} في قائمة المدراء.")
+
+async def admins_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
+        return
+    
+    admins = get_all_admins()
+    if not admins:
+        await update.message.reply_text("لا يوجد مدراء مسجلون.")
+        return
+    
+    msg = "📋 **قائمة المدراء:**\n\n"
+    for a in admins:
+        msg += f"- @{a[1]} (رمز: {a[2]})\n"
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def set_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text("❗ استخدم: /rule النص_الجديد للقاعدة")
+        return
+    
+    new_rule = " ".join(args)
+    # حذف القاعدة القديمة إذا كانت موجودة
+    delete_setting("custom_rule")
+    # إضافة القاعدة الجديدة كقاعدة نشطة
+    add_custom_rule("active_rule", new_rule, user.id)
+    activate_rule("active_rule")
+    await update.message.reply_text("✅ تم تحديث القاعدة بنجاح! سيتم تطبيقها على جميع المستخدمين فوراً.")
+
+async def clear_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    delete_setting("custom_rule")
+    # حذف جميع القواعد المخصصة
+    delete_all_custom_rules()
+    await update.message.reply_text("✅ تم إلغاء القاعدة المخصصة، والعودة إلى القاعدة الافتراضية في الكود.")
+
+# ======================= أوامر القواعد المتعددة =======================
+async def add_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("❗ استخدم: /addrule اسم_القاعدة النص")
+        return
+    
+    rule_name = args[0]
+    rule_text = " ".join(args[1:])
+    add_custom_rule(rule_name, rule_text, user.id)
+    await update.message.reply_text(f"✅ تم إضافة القاعدة '{rule_name}' بنجاح.")
+
+async def list_rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
+        return
+    
+    rules = get_all_custom_rules()
+    if not rules:
+        await update.message.reply_text("لا توجد قواعد مخصصة.")
+        return
+    
+    msg = "📋 **قائمة القواعد المخصصة:**\n\n"
+    for r in rules:
+        status = "✅ (نشطة)" if r[5] == 1 else "⏸ (غير نشطة)"
+        msg += f"- **{r[1]}** {status}\n"
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def show_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text("❗ استخدم: /showrule اسم_القاعدة")
+        return
+    
+    rule_name = args[0]
+    rule_text = get_custom_rule(rule_name)
+    if not rule_text:
+        await update.message.reply_text(f"❌ لم أجد قاعدة باسم '{rule_name}'.")
+        return
+    
+    await update.message.reply_text(f"📜 **نص القاعدة '{rule_name}':**\n\n{rule_text}")
+
+async def activate_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text("❗ استخدم: /activerule اسم_القاعدة")
+        return
+    
+    rule_name = args[0]
+    rule_text = get_custom_rule(rule_name)
+    if not rule_text:
+        await update.message.reply_text(f"❌ لم أجد قاعدة باسم '{rule_name}'.")
+        return
+    
+    activate_rule(rule_name)
+    await update.message.reply_text(f"✅ تم تفعيل القاعدة '{rule_name}' بنجاح. سيتم تطبيقها على جميع المستخدمين فوراً.")
+
+async def edit_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("❗ استخدم: /editrule اسم_القاعدة النص_الجديد")
+        return
+    
+    rule_name = args[0]
+    new_text = " ".join(args[1:])
+    old_text = get_custom_rule(rule_name)
+    if not old_text:
+        await update.message.reply_text(f"❌ لم أجد قاعدة باسم '{rule_name}'.")
+        return
+    
+    update_custom_rule(rule_name, new_text)
+    await update.message.reply_text(f"✅ تم تعديل القاعدة '{rule_name}' بنجاح.")
+
+async def delete_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    args = context.args
+    if not args:
+        await update.message.reply_text("❗ استخدم: /deleterule اسم_القاعدة")
+        return
+    
+    rule_name = args[0]
+    old_text = get_custom_rule(rule_name)
+    if not old_text:
+        await update.message.reply_text(f"❌ لم أجد قاعدة باسم '{rule_name}'.")
+        return
+    
+    delete_custom_rule(rule_name)
+    await update.message.reply_text(f"✅ تم حذف القاعدة '{rule_name}' بنجاح.")
+
+async def clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    # تأكيد الحذف
+    await update.message.reply_text("⚠️ هل أنت متأكد من حذف جميع القواعد المخصصة؟ استخدم /confirm_clear_all لتأكيد الحذف.")
+
+async def confirm_clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+    
+    delete_all_custom_rules()
+    await update.message.reply_text("✅ تم حذف جميع القواعد المخصصة بنجاح. العودة إلى القاعدة الافتراضية.")
 
 # ======================= دوال البوت =======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -595,7 +959,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ========== البحث عن فيديوهات تعليمية ==========
     educational_keywords = [
-        # الأفعال الصريحة
         "كيف", "طريقة", "شرح", "خطوات", "تعليم", "دليل", "إجراءات",
         "علمني", "فهمني", "افهمني", "شلون", "وشلون", "كيفية",
         "الطريقة", "الشرح", "التعليم", "الدليل", "الإجراءات",
@@ -603,7 +966,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "مراحل", "آلية", "منهجية", "سير", "عملية", "إرشادات",
         "دربني", "عرّفني", "أرشدني", "وضح", "بيّن", "فصّل",
         "اسلوب", "اشرح لي", "وضح لي", "قول لي", "دروس",
-        # العامية الخليجية
         "إيش", "ايش", "كيفي", "شلونكم", "كيفكم"
     ]
     if any(word in user_message.lower() for word in educational_keywords):
@@ -618,7 +980,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except Exception as e:
             logger.warning(f"⚠️ فشل البحث عن يوتيوب: {e}")
-            # نكمل للرد العادي
 
     context_data = get_context(user_id)
     if context_data:
@@ -683,11 +1044,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"❌ خطأ في handle_message: {e}")
         await update.message.reply_text(f"❌ حدث خطأ تقني: {e}")
 
-# ======================= أوامر الإحصائيات والمقاييس =======================
+# ======================= أوامر الإحصائيات والمقاييس (متاحة للمدراء) =======================
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id != ADMIN_ID and ADMIN_ID != 0:
-        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     stats = get_stats()
     top_q = "\n".join([f"- {q[0]}: {q[1]} مرة" for q in stats["top_questions"]]) if stats["top_questions"] else "لا توجد أسئلة مسجلة."
@@ -707,8 +1068,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id != ADMIN_ID and ADMIN_ID != 0:
-        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     keywords = get_top_keywords(10)
     if not keywords:
@@ -719,8 +1080,8 @@ async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id != ADMIN_ID and ADMIN_ID != 0:
-        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     users = get_all_users()
     if not users:
@@ -737,8 +1098,8 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id != ADMIN_ID and ADMIN_ID != 0:
-        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     args = context.args
     if not args:
@@ -763,8 +1124,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user.id != ADMIN_ID and ADMIN_ID != 0:
-        await update.message.reply_text("⛔ هذا الأمر للمسؤول فقط.")
+    if not is_admin(user.id) and user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     output = io.StringIO()
     writer = csv.writer(output)
@@ -786,13 +1147,37 @@ def main():
     init_db()
     logger.info("✅ قاعدة البيانات جاهزة.")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # أوامر البوت العامة
     app.add_handler(CommandHandler("start", start))
+    
+    # أوامر الإدارة (المالك الأساسي)
+    app.add_handler(CommandHandler("addadmin", add_admin_command))
+    app.add_handler(CommandHandler("removeadmin", remove_admin_command))
+    app.add_handler(CommandHandler("rule", set_rule_command))
+    app.add_handler(CommandHandler("clearrule", clear_rule_command))
+    
+    # أوامر القواعد المتعددة (المالك الأساسي)
+    app.add_handler(CommandHandler("addrule", add_rule_command))
+    app.add_handler(CommandHandler("listrules", list_rules_command))
+    app.add_handler(CommandHandler("showrule", show_rule_command))
+    app.add_handler(CommandHandler("activerule", activate_rule_command))
+    app.add_handler(CommandHandler("editrule", edit_rule_command))
+    app.add_handler(CommandHandler("deleterule", delete_rule_command))
+    app.add_handler(CommandHandler("clearallrules", clear_all_rules_command))
+    app.add_handler(CommandHandler("confirm_clear_all", confirm_clear_all_rules_command))
+    
+    # أوامر المدراء
+    app.add_handler(CommandHandler("admins", admins_list_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("top", top_keywords_command))
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("export", export_command))
+    
+    # معالج الرسائل
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
     logger.info("✅ البوت العقاري يعمل بنظام ثنائي (Groq + Gemini Fallback) مع تذييل إجباري وقاعدة بيانات متقدمة...")
     app.run_polling()
 
