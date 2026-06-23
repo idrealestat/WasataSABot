@@ -1271,8 +1271,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats()
     
     welcome_msg = f"""
-سم طال عمرك.. هل لديك سؤال عقاري؟
-
 📊 **إحصائيات البوت:**
 ━━━━━━━━━━━━━━━━━━━
 👥 **المستخدمين الحاليين:** {stats['active_today']}
@@ -1290,6 +1288,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 *استخدم الأمر متبوعاً برسالتك، مثال:*
 /suggest أتمنى إضافة خاصية كذا
+
+❓ **سم طال عمرك.. هل لديك سؤال عقاري؟**
 """
     await update.message.reply_text(welcome_msg, parse_mode=ParseMode.MARKDOWN)
 
