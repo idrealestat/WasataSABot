@@ -327,11 +327,11 @@ def save_feedback(user_id, username, feedback_type, message):
 def get_feedback_stats():
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'بلاغ'")
+    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'report'")
     reports = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'اقتراح'")
+    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'suggest'")
     suggestions = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'شكوى'")
+    c.execute("SELECT COUNT(*) FROM feedback WHERE type = 'complain'")
     complaints = c.fetchone()[0]
     c.execute("SELECT COUNT(*) FROM feedback WHERE is_replied = 0")
     pending = c.fetchone()[0]
@@ -1169,7 +1169,7 @@ async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE, f
 📅 **التاريخ:** {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 للرد على هذا المستخدم، استخدم:
-`/رد {user_id} نص ردك`
+`/reply {user_id} نص ردك`
 """
         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
@@ -1189,8 +1189,8 @@ async def reply_to_user_command(update: Update, context: ContextTypes.DEFAULT_TY
     args = context.args
     if len(args) < 2:
         await update.message.reply_text(
-            "❗ استخدم: /رد [معرف_المستخدم] [نص الرد]\n\n"
-            "مثال: /رد 123456789 شكراً على ملاحظتك"
+            "❗ استخدم: /reply [معرف_المستخدم] [نص الرد]\n\n"
+            "مثال: /reply 123456789 شكراً على ملاحظتك"
         )
         return
     
@@ -1221,9 +1221,9 @@ async def feedback_stats_command(update: Update, context: ContextTypes.DEFAULT_T
     msg = f"""
 📊 **إحصائيات التغذية الراجعة:**
 
-📌 **البلاغات:** {stats['reports']}
-💡 **الاقتراحات:** {stats['suggestions']}
-⚠️ **الشكاوى:** {stats['complaints']}
+📌 **البلاغات (report):** {stats['reports']}
+💡 **الاقتراحات (suggest):** {stats['suggestions']}
+⚠️ **الشكاوى (complain):** {stats['complaints']}
 ⏳ **قيد الانتظار (لم يُرد عليها):** {stats['pending']}
 
 🔥 **أكثر موضوع تكرراً:** "{stats['most_common_topic']}" ({stats['most_common_count']} مرة)
@@ -1284,12 +1284,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 خصوصيتك أمانة في أعناقنا.
 
 📢 **للتواصل مع المسؤول:**
-- /بلاغ للإبلاغ عن مشكلة أو خطأ
-- /اقتراح لتقديم فكرة تطوير
-- /شكوى لتقديم شكوى
+- /report للإبلاغ عن مشكلة أو خطأ
+- /suggest لتقديم فكرة تطوير
+- /complain لتقديم شكوى
 
 *استخدم الأمر متبوعاً برسالتك، مثال:*
-/اقتراح أتمنى إضافة خاصية كذا
+/suggest أتمنى إضافة خاصية كذا
 """
     await update.message.reply_text(welcome_msg, parse_mode=ParseMode.MARKDOWN)
 
@@ -1420,10 +1420,10 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ **أمر غير معروف.**\n\n"
         "📌 **الأوامر المتاحة:**\n"
         "- /start للبدء\n"
-        "- /اقتراح لتقديم اقتراح\n"
-        "- /بلاغ للإبلاغ عن مشكلة\n"
-        "- /شكوى لتقديم شكوى\n\n"
-        "📞 للتواصل مع المسؤول: استخدم /اقتراح أو /بلاغ أو /شكوى"
+        "- /suggest لتقديم اقتراح\n"
+        "- /report للإبلاغ عن مشكلة\n"
+        "- /complain لتقديم شكوى\n\n"
+        "📞 للتواصل مع المسؤول: استخدم /suggest أو /report أو /complain"
     )
 
 # ======================= أوامر الإحصائيات والمقاييس (متاحة للمدراء) =======================
@@ -1535,14 +1535,14 @@ def main():
     app.add_handler(CommandHandler("start", start))
     
     # أوامر التغذية الراجعة (لجميع المستخدمين)
-    app.add_handler(CommandHandler("بلاغ", lambda u, c: feedback_command(u, c, "بلاغ")))
-    app.add_handler(CommandHandler("اقتراح", lambda u, c: feedback_command(u, c, "اقتراح")))
-    app.add_handler(CommandHandler("شكوى", lambda u, c: feedback_command(u, c, "شكوى")))
+    app.add_handler(CommandHandler("report", lambda u, c: feedback_command(u, c, "report")))
+    app.add_handler(CommandHandler("suggest", lambda u, c: feedback_command(u, c, "suggest")))
+    app.add_handler(CommandHandler("complain", lambda u, c: feedback_command(u, c, "complain")))
     
     # أوامر الرد والإحصائيات (للمسؤول والمدراء)
-    app.add_handler(CommandHandler("رد", reply_to_user_command))
-    app.add_handler(CommandHandler("تغذية", feedback_stats_command))
-    app.add_handler(CommandHandler("تصدير_تغذية", export_feedback_command))
+    app.add_handler(CommandHandler("reply", reply_to_user_command))
+    app.add_handler(CommandHandler("feedback_stats", feedback_stats_command))
+    app.add_handler(CommandHandler("export_feedback", export_feedback_command))
     
     # أوامر الإدارة (المالك الأساسي)
     app.add_handler(CommandHandler("addadmin", add_admin_command))
