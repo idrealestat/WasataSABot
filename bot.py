@@ -305,11 +305,22 @@ def get_active_rule():
 def get_stats():
     conn = get_db_connection()
     c = conn.cursor()
+    
+    # جميع المستخدمين
     c.execute("SELECT COUNT(*) FROM users")
     total_users = c.fetchone()[0]
+    
+    # النشطين خلال 7 أيام
     week_ago = (datetime.now() - timedelta(days=7)).isoformat()
     c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (week_ago,))
-    active_users = c.fetchone()[0]
+    active_week = c.fetchone()[0]
+    
+    # المستخدمين النشطين اليوم
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (today_start,))
+    active_today = c.fetchone()[0]
+    
+    # باقي الإحصائيات (الأسئلة، الرفض)
     c.execute("SELECT question_text, count FROM questions ORDER BY count DESC LIMIT 5")
     top_questions = c.fetchall()
     c.execute("SELECT COUNT(*) FROM rejections")
@@ -317,10 +328,13 @@ def get_stats():
     c.execute("SELECT SUM(total_messages) FROM users")
     total_messages = c.fetchone()[0] or 0
     conn.close()
+    
     rejection_rate = (total_rejections / total_messages * 100) if total_messages > 0 else 0
+    
     return {
         "total_users": total_users,
-        "active_users": active_users,
+        "active_week": active_week,
+        "active_today": active_today,
         "top_questions": top_questions,
         "total_rejections": total_rejections,
         "rejection_rate": round(rejection_rate, 2),
@@ -666,7 +680,7 @@ def is_api_error(response_text: str) -> bool:
         "429",
         "500",
         "503",
-        "fشل",
+        "فشل",
         "❌",
         "فشل الاتصال",
         "HTTPError",
@@ -1044,16 +1058,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(user.id, user.username, user.first_name)
     
     stats = get_stats()
-    total_users = stats['total_users']
-    now = datetime.now().strftime("%Y-%m-%d")
     
     welcome_msg = f"""
-🏠 **مرحباً بك في بوت الخبير العقاري!**
+سم طال عمرك.. هل لديك سؤال عقاري؟
 
-👥 **عدد المستخدمين الحالي:** {total_users} مستخدم
-📊 **آخر تحديث:** {now}
+📊 **إحصائيات البوت:**
+━━━━━━━━━━━━━━━━━━━
+👥 **المستخدمين الحاليين:** {stats['active_today']}
+📈 **النشطين (آخر 7 أيام):** {stats['active_week']}
+📊 **جميع المستخدمين:** {stats['total_users']}
+━━━━━━━━━━━━━━━━━━━
 
-تفضل: هل لديك اي سؤال عقاري ؟
+🔒 تطمن، لا يمكن لأحد الاطلاع على محادثاتك.
+خصوصيتك أمانة في أعناقنا.
 """
     await update.message.reply_text(welcome_msg, parse_mode=ParseMode.MARKDOWN)
 
@@ -1190,7 +1207,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **إحصائيات البوت العقاري**
 
 👥 **إجمالي المستخدمين:** {stats['total_users']}
-🟢 **نشطاء آخر 7 أيام:** {stats['active_users']}
+🟢 **نشطاء آخر 7 أيام:** {stats['active_week']}
+🟢 **نشطاء اليوم:** {stats['active_today']}
 💬 **إجمالي الرسائل:** {stats['total_messages']}
 🚫 **حالات الرفض:** {stats['total_rejections']}
 📉 **معدل الرفض:** {stats['rejection_rate']}%
