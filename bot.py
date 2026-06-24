@@ -28,8 +28,8 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 # متغيرات البوابة الجديدة
-GATEWAY_URL = os.getenv("GATEWAY_URL")  # مثال: https://free-llm-gateway.onrender.com/v1
-GATEWAY_API_KEY = os.getenv("GATEWAY_API_KEY")  # المفتاح الرئيسي (MASTER_KEY)
+GATEWAY_URL = os.getenv("GATEWAY_URL")
+GATEWAY_API_KEY = os.getenv("GATEWAY_API_KEY")
 
 if not TELEGRAM_TOKEN or not GROQ_API_KEY or not GOOGLE_API_KEY:
     raise ValueError("❌ تأكد من وجود TELEGRAM_BOT_TOKEN و GROQ_API_KEY و GOOGLE_API_KEY في ملف .env")
@@ -839,7 +839,7 @@ def get_ai_response(user_message: str) -> str:
         try:
             logger.info("🔄 باستخدام البوابة (free-llm-gateway)...")
             response = client_gateway.chat.completions.create(
-                model="free-llm-gateway",  # النموذج سيتم اختياره تلقائياً من البوابة
+                model="free-llm-gateway",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
@@ -1381,6 +1381,7 @@ https://saudiproperties.rega.gov.sa/zones
 # ======================= دوال البوت =======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    # تسجيل المستخدم عند بدء المحادثة
     save_user(user.id, user.username, user.first_name)
     
     stats = get_stats()
@@ -1466,6 +1467,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id) and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
+    # تسجيل المدير عند استخدام الأمر
+    save_user(user.id, user.username, user.first_name)
+    
     stats = get_stats()
     top_q = "\n".join([f"- {q[0]}: {q[1]} مرة" for q in stats["top_questions"]]) if stats["top_questions"] else "لا توجد أسئلة مسجلة."
     msg = f"""
@@ -1488,6 +1492,9 @@ async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not is_admin(user.id) and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
+    # تسجيل المدير عند استخدام الأمر
+    save_user(user.id, user.username, user.first_name)
+    
     keywords = get_top_keywords(10)
     if not keywords:
         await update.message.reply_text("لا توجد كلمات مفتاحية مسجلة حتى الآن.")
@@ -1500,6 +1507,9 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id) and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
+    # تسجيل المدير عند استخدام الأمر
+    save_user(user.id, user.username, user.first_name)
+    
     users = get_all_users()
     if not users:
         await update.message.reply_text("لا يوجد مستخدمون مسجلون.")
@@ -1518,6 +1528,9 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id) and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
+    # تسجيل المدير عند استخدام الأمر
+    save_user(user.id, user.username, user.first_name)
+    
     args = context.args
     if not args:
         await update.message.reply_text("❗ استخدم: /broadcast النص الذي تريد نشره")
@@ -1544,6 +1557,9 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id) and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
+    # تسجيل المدير عند استخدام الأمر
+    save_user(user.id, user.username, user.first_name)
+    
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["النوع", "المعرف", "الاسم", "القيمة", "التكرار", "آخر تحديث"])
@@ -1570,6 +1586,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_secret_confirmation(update, context)
         return
 
+    # تسجيل المستخدم عند أي تفاعل
     save_user(user_id, user.username, user.first_name)
     
     last_activity = get_last_activity(user_id)
