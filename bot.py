@@ -1513,6 +1513,128 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     output.seek(0)
     await update.message.reply_document(document=io.BytesIO(output.getvalue().encode('utf-8')), filename="bot_export.csv")
 
+# ======================= معالج الرسائل الأساسي =======================
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    user_message = update.message.text.strip()
+
+    # التحقق من وجود طلب تأكيد بالرقم السري معلق لهذا المستخدم
+    if user_id in pending_secret_requests:
+        await handle_secret_confirmation(update, context)
+        return
+
+    save_user(user_id, user.username, user.first_name)
+    
+    last_activity = get_last_activity(user_id)
+    show_header = False
+    if last_activity:
+        try:
+            last_time = datetime.fromisoformat(last_activity)
+            time_diff = datetime.now() - last_time
+            if time_diff.total_seconds() > 7200:
+                show_header = True
+        except:
+            pass
+    update_last_activity(user_id)
+
+    save_question(user_message)
+    keywords = [word for word in user_message.split() if len(word) > 2]
+    save_keywords(keywords)
+
+    # ========== البحث عن فيديوهات تعليمية (YouTube) ==========
+    # هذه الميزة مستقلة تماماً عن الردود الذكية، وتستخدم Google API فقط
+    educational_keywords = [
+        "كيف", "طريقة", "شرح", "خطوات", "تعليم", "دليل", "إجراءات",
+        "علمني", "فهمني", "افهمني", "شلون", "وشلون", "كيفية",
+        "الطريقة", "الشرح", "التعليم", "الدليل", "الإجراءات",
+        "أبغى", "أريد", "عطني", "وريني", "قلي", "قولي",
+        "مراحل", "آلية", "منهجية", "سير", "عملية", "إرشادات",
+        "دربني", "عرّفني", "أرشدني", "وضح", "بيّن", "فصّل",
+        "اسلوب", "اشرح لي", "وضح لي", "قول لي", "دروس",
+        "إيش", "ايش", "كيفي", "شلونكم", "كيفكم"
+    ]
+    is_educational = any(word in user_message.lower() for word in educational_keywords)
+    
+    # إذا كان السؤال تعليمياً، نبحث في YouTube مباشرة ونرسل النتائج
+    if is_educational:
+        try:
+            youtube_results = search_youtube(user_message, GOOGLE_API_KEY, max_results=3)
+            if youtube_results:
+                reply = f"📹 **فيديوهات تعليمية مفيدة حول:** {user_message}\n\n"
+                for idx, video in enumerate(youtube_results, 1):
+                    reply += f"{idx}. [{video['title']}]({video['url']})\n"
+                reply += "\n_هذه الفيديوهات من يوتيوب، راجعها للاستفادة._"
+                await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+                return
+        except Exception as e:
+            logger.warning(f"⚠️ فشل البحث عن يوتيوب: {e}")
+            # نكمل للرد العادي (Groq/OpenRouter/Gemini)
+
+    # ========== الردود الذكية (Groq → OpenRouter → Gemini) ==========
+    context_data = get_context(user_id)
+    if context_data:
+        last_suggestion = context_data.get("last_suggestion")
+        last_question_time = context_data.get("last_question_time")
+        if last_suggestion and last_question_time:
+            try:
+                time_diff = datetime.now() - datetime.fromisoformat(last_question_time)
+                if time_diff.total_seconds() < 300:
+                    yes_words = ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل", "اوكي", "ok", "yes", "نعم اريد", "نعم ابغى", "حسناً", "حسنا"]
+                    if any(word in user_message.lower() for word in yes_words):
+                        detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة (الشروط، الإجراءات، الخطوات، المساحات، الضرائب، التنبيهات، إلخ). قدّم الإجابة كاملة دون اختصار."
+                        reply = get_ai_response(detailed_prompt)
+                        if FOOTER.strip() not in reply.strip():
+                            reply = reply + FOOTER
+                        await update.message.reply_text(reply)
+                        clear_context(user_id)
+                        return
+            except:
+                pass
+
+    try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        reply = get_ai_response(user_message)
+
+        is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in reply
+        
+        if is_apology:
+            save_rejection(user_message)
+            await update.message.reply_text(reply)
+            return
+
+        if FOOTER.strip() not in reply.strip():
+            reply = reply + FOOTER
+
+        suggestion = ""
+        if "هل تريد" in reply or "هل لديك" in reply:
+            lines = reply.split("\n")
+            for line in reversed(lines):
+                if "هل تريد" in line or "هل لديك" in line:
+                    suggestion = line
+                    break
+            if suggestion:
+                save_context(user_id, user_message, suggestion)
+
+        if show_header:
+            stats = get_stats()
+            total_users = stats['total_users']
+            now = datetime.now().strftime("%Y-%m-%d")
+            header = f"""
+🏠 **مرحباً بعودتك إلى بوت الخبير العقاري!**
+
+👥 **عدد المستخدمين الحالي:** {total_users} مستخدم
+📊 **آخر تحديث:** {now}
+
+"""
+            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN)
+        else:
+            await update.message.reply_text(reply)
+
+    except Exception as e:
+        logger.error(f"❌ خطأ في handle_message: {e}")
+        await update.message.reply_text(f"❌ حدث خطأ تقني: {e}")
+
 # ======================= التشغيل =======================
 def main():
     init_db()
