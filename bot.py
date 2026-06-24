@@ -391,7 +391,7 @@ def get_stats():
     conn = get_db_connection()
     c = conn.cursor()
     
-    # جميع المستخدمين
+    # جميع المستخدمين (الإجمالي التراكمي)
     c.execute("SELECT COUNT(*) FROM users")
     total_users = c.fetchone()[0]
     
@@ -400,10 +400,10 @@ def get_stats():
     c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (week_ago,))
     active_week = c.fetchone()[0]
     
-    # المستخدمين النشطين اليوم
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (today_start,))
-    active_today = c.fetchone()[0]
+    # ===== التعديل الجديد: المستخدمين الحاليين = النشطاء خلال آخر 5 دقائق =====
+    five_min_ago = (datetime.now() - timedelta(minutes=5)).isoformat()
+    c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (five_min_ago,))
+    active_now = c.fetchone()[0]
     
     # باقي الإحصائيات (الأسئلة، الرفض)
     c.execute("SELECT question_text, count FROM questions ORDER BY count DESC LIMIT 5")
@@ -419,7 +419,7 @@ def get_stats():
     return {
         "total_users": total_users,
         "active_week": active_week,
-        "active_today": active_today,
+        "active_now": active_now,
         "top_questions": top_questions,
         "total_rejections": total_rejections,
         "rejection_rate": round(rejection_rate, 2),
@@ -789,7 +789,7 @@ https://linktr.ee/sultan.al3siry
 **"الوسيط هو المسؤول الوحيد عن امتثال أعماله للأنظمة والتشريعات السعودية"**
 """
 
-# ======================= دوال الذكاء الاصطناعي (مع التبديل الثلاثي والفلتر) =======================
+# ======================= دوال الذكاء الاصطناعي (مع التبديل الثلاثي: OpenRouter ← Groq ← Gemini) =======================
 def is_api_error(response_text: str) -> bool:
     """التحقق من أن الرد ليس خطأ API."""
     error_indicators = [
@@ -818,9 +818,40 @@ def get_ai_response(user_message: str) -> str:
     active_rule = get_active_rule()
     system_prompt = active_rule if active_rule else BASE_SYSTEM_PROMPT
     
-    # ========== محاولة 1: Groq ==========
+    # ========== محاولة 1: OpenRouter (الأساسي) مع تنقل بين 3 نماذج ==========
+    if client_openrouter:
+        openrouter_models = [
+            "google/gemini-2.5-flash",      # الأسرع والأكثر استقراراً
+            "anthropic/claude-3-haiku",      # خفيف وسريع
+            "meta-llama/llama-3.1-8b-instruct"  # مجاني وقوي
+        ]
+        
+        for model in openrouter_models:
+            try:
+                logger.info(f"🔄 باستخدام OpenRouter (النموذج: {model})...")
+                response = client_openrouter.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message}
+                    ],
+                    temperature=0.2,
+                    max_tokens=3500
+                )
+                reply = response.choices[0].message.content
+                if not is_api_error(reply):
+                    logger.info(f"✅ OpenRouter ({model}): رد صحيح")
+                    return reply
+                else:
+                    logger.warning(f"⚠️ OpenRouter ({model}): رد يحتوي على خطأ: {reply[:200]}...")
+            except Exception as e:
+                logger.warning(f"⚠️ فشل OpenRouter ({model}): {e}")
+    else:
+        logger.info("⏭️ OpenRouter غير متاح (OPENROUTER_API_KEY غير مضبوط)")
+    
+    # ========== محاولة 2: Groq (الخيار الثاني) ==========
     try:
-        logger.info("⚡ باستخدام Groq (سرعة فائقة)...")
+        logger.info("⚡ باستخدام Groq (الخيار الثاني)...")
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -838,30 +869,6 @@ def get_ai_response(user_message: str) -> str:
             logger.warning(f"⚠️ Groq: رد يحتوي على خطأ: {reply[:200]}...")
     except Exception as e:
         logger.warning(f"⚠️ فشل Groq: {e}")
-    
-    # ========== محاولة 2: OpenRouter ==========
-    if client_openrouter:
-        try:
-            logger.info("🔄 باستخدام OpenRouter (احتياطي)...")
-            response = client_openrouter.chat.completions.create(
-                model="google/gemini-2.5-flash",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message}
-                ],
-                temperature=0.2,
-                max_tokens=3500
-            )
-            reply = response.choices[0].message.content
-            if not is_api_error(reply):
-                logger.info("✅ OpenRouter: رد صحيح")
-                return reply
-            else:
-                logger.warning(f"⚠️ OpenRouter: رد يحتوي على خطأ: {reply[:200]}...")
-        except Exception as e:
-            logger.warning(f"⚠️ فشل OpenRouter: {e}")
-    else:
-        logger.info("⏭️ OpenRouter غير متاح (OPENROUTER_API_KEY غير مضبوط)")
     
     # ========== محاولة 3: Gemini (Google API) ==========
     try:
@@ -1342,9 +1349,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_msg = f"""
 📊 **إحصائيات البوت:**
 ━━━━━━━━━━━━━━━━━━━
-👥 **المستخدمين الحاليين:** {stats['active_today']}
+🟢 **المستخدمين الحاليين (آخر 5 دقائق):** {stats['active_now']}
 📈 **النشطين (آخر 7 أيام):** {stats['active_week']}
-📊 **جميع المستخدمين:** {stats['total_users']}
+📊 **جميع المستخدمين (منذ البداية):** {stats['total_users']}
 ━━━━━━━━━━━━━━━━━━━
 
 🔒 تطمن، لا يمكن لأحد الاطلاع على محادثاتك.
@@ -1425,9 +1432,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"""
 📊 **إحصائيات البوت العقاري**
 
-👥 **إجمالي المستخدمين:** {stats['total_users']}
+👥 **جميع المستخدمين (منذ البداية):** {stats['total_users']}
 🟢 **نشطاء آخر 7 أيام:** {stats['active_week']}
-🟢 **نشطاء اليوم:** {stats['active_today']}
+🟢 **نشطاء الآن (آخر 5 دقائق):** {stats['active_now']}
 💬 **إجمالي الرسائل:** {stats['total_messages']}
 🚫 **حالات الرفض:** {stats['total_rejections']}
 📉 **معدل الرفض:** {stats['rejection_rate']}%
@@ -1571,7 +1578,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"⚠️ فشل البحث عن يوتيوب: {e}")
             # نكمل للرد العادي (Groq/OpenRouter/Gemini)
 
-    # ========== الردود الذكية (Groq → OpenRouter → Gemini) ==========
+    # ========== الردود الذكية (OpenRouter → Groq → Gemini) ==========
     context_data = get_context(user_id)
     if context_data:
         last_suggestion = context_data.get("last_suggestion")
@@ -1689,7 +1696,7 @@ def main():
     # معالج الرسائل
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info("✅ البوت العقاري يعمل بنظام ثلاثي (Groq → OpenRouter → Gemini) مع تذييل إجباري وقاعدة بيانات متقدمة...")
+    logger.info("✅ البوت العقاري يعمل بنظام ثلاثي (OpenRouter → Groq → Gemini) مع تذييل إجباري وقاعدة بيانات متقدمة...")
     app.run_polling()
 
 if __name__ == "__main__":
