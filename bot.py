@@ -1,3 +1,4 @@
+```python
 import os
 import logging
 import sqlite3
@@ -27,6 +28,10 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
+# متغيرات البوابة الجديدة
+GATEWAY_URL = os.getenv("GATEWAY_URL")  # مثال: https://free-llm-gateway.onrender.com/v1
+GATEWAY_API_KEY = os.getenv("GATEWAY_API_KEY")  # المفتاح الرئيسي (MASTER_KEY)
+
 if not TELEGRAM_TOKEN or not GROQ_API_KEY or not GOOGLE_API_KEY:
     raise ValueError("❌ تأكد من وجود TELEGRAM_BOT_TOKEN و GROQ_API_KEY و GOOGLE_API_KEY في ملف .env")
 
@@ -41,6 +46,17 @@ client_gemini = OpenAI(api_key=GOOGLE_API_KEY, base_url="https://generativelangu
 client_openrouter = None
 if OPENROUTER_API_KEY:
     client_openrouter = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+
+# ======================= عميل البوابة الجديد (free-llm-gateway) =======================
+client_gateway = None
+if GATEWAY_URL and GATEWAY_API_KEY:
+    client_gateway = OpenAI(
+        api_key=GATEWAY_API_KEY,
+        base_url=GATEWAY_URL
+    )
+    logger.info("✅ تم إعداد عميل البوابة (free-llm-gateway) بنجاح.")
+else:
+    logger.warning("⚠️ GATEWAY_URL أو GATEWAY_API_KEY غير مضبوط. سيتم استخدام المفاتيح المباشرة.")
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -400,7 +416,7 @@ def get_stats():
     c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (week_ago,))
     active_week = c.fetchone()[0]
     
-    # ===== التعديل الجديد: المستخدمين الحاليين = النشطاء خلال آخر 5 دقائق =====
+    # المستخدمين الحاليين = النشطاء خلال آخر 5 دقائق
     five_min_ago = (datetime.now() - timedelta(minutes=5)).isoformat()
     c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (five_min_ago,))
     active_now = c.fetchone()[0]
@@ -789,7 +805,7 @@ https://linktr.ee/sultan.al3siry
 **"الوسيط هو المسؤول الوحيد عن امتثال أعماله للأنظمة والتشريعات السعودية"**
 """
 
-# ======================= دوال الذكاء الاصطناعي (مع التبديل الثلاثي: OpenRouter ← Groq ← Gemini) =======================
+# ======================= دوال الذكاء الاصطناعي (مع دمج البوابة الجديدة) =======================
 def is_api_error(response_text: str) -> bool:
     """التحقق من أن الرد ليس خطأ API."""
     error_indicators = [
@@ -818,14 +834,37 @@ def get_ai_response(user_message: str) -> str:
     active_rule = get_active_rule()
     system_prompt = active_rule if active_rule else BASE_SYSTEM_PROMPT
     
-    # ========== محاولة 1: OpenRouter (الأساسي) مع تنقل بين 3 نماذج ==========
+    # ========== محاولة 1: البوابة (free-llm-gateway) ==========
+    if client_gateway:
+        try:
+            logger.info("🔄 باستخدام البوابة (free-llm-gateway)...")
+            response = client_gateway.chat.completions.create(
+                model="free-llm-gateway",  # النموذج سيتم اختياره تلقائياً من البوابة
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.2,
+                max_tokens=3500
+            )
+            reply = response.choices[0].message.content
+            if not is_api_error(reply):
+                logger.info("✅ البوابة: رد صحيح")
+                return reply
+            else:
+                logger.warning(f"⚠️ البوابة: رد يحتوي على خطأ: {reply[:200]}...")
+        except Exception as e:
+            logger.warning(f"⚠️ فشل البوابة: {e}")
+    else:
+        logger.info("⏭️ البوابة غير متاحة (GATEWAY_URL أو GATEWAY_API_KEY غير مضبوط)")
+    
+    # ========== محاولة 2: OpenRouter ==========
     if client_openrouter:
         openrouter_models = [
-            "google/gemini-2.5-flash",      # الأسرع والأكثر استقراراً
-            "anthropic/claude-3-haiku",      # خفيف وسريع
-            "meta-llama/llama-3.1-8b-instruct"  # مجاني وقوي
+            "google/gemini-2.5-flash",
+            "anthropic/claude-3-haiku",
+            "meta-llama/llama-3.1-8b-instruct"
         ]
-        
         for model in openrouter_models:
             try:
                 logger.info(f"🔄 باستخدام OpenRouter (النموذج: {model})...")
@@ -849,9 +888,9 @@ def get_ai_response(user_message: str) -> str:
     else:
         logger.info("⏭️ OpenRouter غير متاح (OPENROUTER_API_KEY غير مضبوط)")
     
-    # ========== محاولة 2: Groq (الخيار الثاني) ==========
+    # ========== محاولة 3: Groq ==========
     try:
-        logger.info("⚡ باستخدام Groq (الخيار الثاني)...")
+        logger.info("⚡ باستخدام Groq...")
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -870,7 +909,7 @@ def get_ai_response(user_message: str) -> str:
     except Exception as e:
         logger.warning(f"⚠️ فشل Groq: {e}")
     
-    # ========== محاولة 3: Gemini (Google API) ==========
+    # ========== محاولة 4: Gemini ==========
     try:
         logger.info("🔄 باستخدام Google Gemini (الملاذ الأخير)...")
         response = client_gemini.chat.completions.create(
@@ -1576,9 +1615,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         except Exception as e:
             logger.warning(f"⚠️ فشل البحث عن يوتيوب: {e}")
-            # نكمل للرد العادي (Groq/OpenRouter/Gemini)
+            # نكمل للرد العادي
 
-    # ========== الردود الذكية (OpenRouter → Groq → Gemini) ==========
+    # ========== الردود الذكية (البوابة → OpenRouter → Groq → Gemini) ==========
     context_data = get_context(user_id)
     if context_data:
         last_suggestion = context_data.get("last_suggestion")
@@ -1696,8 +1735,9 @@ def main():
     # معالج الرسائل
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info("✅ البوت العقاري يعمل بنظام ثلاثي (OpenRouter → Groq → Gemini) مع تذييل إجباري وقاعدة بيانات متقدمة...")
+    logger.info("✅ البوت العقاري يعمل بنظام رباعي (Gateway → OpenRouter → Groq → Gemini) مع تذييل إجباري وقاعدة بيانات متقدمة...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+```
