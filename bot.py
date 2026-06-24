@@ -17,7 +17,7 @@ try:
     YOUTUBE_AVAILABLE = True
 except ImportError:
     YOUTUBE_AVAILABLE = False
-    logging.warning("⚠️ مكتبة YouTube غير مثبتة، سيتم تعطيل البحث.")
+    # logging will be set up later
 
 # ======================= تحميل المتغيرات البيئية =======================
 load_dotenv()
@@ -36,6 +36,10 @@ if not TELEGRAM_TOKEN or not GROQ_API_KEY or not GOOGLE_API_KEY:
 
 if ADMIN_ID == 0:
     print("⚠️ تحذير: ADMIN_ID غير مضبوط. لن تعمل أوامر /broadcast و /stats و /top و /users و /export و /addadmin.")
+
+# ======================= إعداد التسجيل (logging) أولاً =======================
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ======================= إعداد العملاء =======================
 client_groq = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
@@ -56,9 +60,6 @@ if GATEWAY_URL and GATEWAY_API_KEY:
     logger.info("✅ تم إعداد عميل البوابة (free-llm-gateway) بنجاح.")
 else:
     logger.warning("⚠️ GATEWAY_URL أو GATEWAY_API_KEY غير مضبوط. سيتم استخدام المفاتيح المباشرة.")
-
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # ======================= قاعدة البيانات =======================
 DB_PATH = "bot_data.db"
