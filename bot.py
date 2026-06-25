@@ -463,6 +463,8 @@ OFFICIAL_CHANNELS_HANDLES = [
     "RERSaudi",
     "Balady_KSA",
     "Egar.Aqar.sa1",
+    "saudiproperties",
+    "RealEstateSaudi",
 ]
 
 SECONDARY_CHANNELS_HANDLES = []
@@ -512,7 +514,8 @@ def search_youtube_channel(query, api_key, channel_id, max_results=3, order='dat
             type='video',
             maxResults=max_results,
             channelId=channel_id,
-            order=order
+            order=order,
+            regionCode='SA'  # تحديد المنطقة بالسعودية
         )
         response = request.execute()
         results = []
@@ -527,7 +530,7 @@ def search_youtube_channel(query, api_key, channel_id, max_results=3, order='dat
         logger.error(f"❌ خطأ في البحث في القناة {channel_id}: {e}")
         return []
 
-def search_youtube_general(query, api_key, max_results=3, order='date'):
+def search_youtube_general(query, api_key, max_results=5, order='relevance'):
     try:
         youtube = build('youtube', 'v3', developerKey=api_key)
         request = youtube.search().list(
@@ -535,7 +538,8 @@ def search_youtube_general(query, api_key, max_results=3, order='date'):
             q=query,
             type='video',
             maxResults=max_results,
-            order=order
+            order=order,
+            regionCode='SA'  # تحديد المنطقة بالسعودية
         )
         response = request.execute()
         results = []
@@ -550,10 +554,16 @@ def search_youtube_general(query, api_key, max_results=3, order='date'):
         logger.error(f"❌ خطأ في البحث العام: {e}")
         return []
 
-def search_youtube(query, api_key, max_results=3):
+def search_youtube(query, api_key, max_results=5):
     if not YOUTUBE_AVAILABLE:
         return []
-    search_query = f"{query} وساطة عقارية سعودية تعليمي شرح"
+    # تحسين الاستعلام بناءً على الكلمات المفتاحية مع إضافة "السعودية" لتحديد النتائج
+    if "تسجيل" in query or "عيني" in query or "السجل" in query:
+        search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح السعودية"
+    else:
+        search_query = f"{query} وساطة عقارية سعودية تعليمي شرح السعودية"
+    
+    # البحث أولاً في القنوات الرسمية
     for handle in OFFICIAL_CHANNELS_HANDLES:
         channel_id = get_channel_id_from_handle_cached(handle, api_key)
         if channel_id:
@@ -565,7 +575,7 @@ def search_youtube(query, api_key, max_results=3):
             if "429" in str(get_channel_id_from_handle_cached.cache_info()):
                 break
     logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
-    return search_youtube_general(search_query, api_key, max_results, order='date')
+    return search_youtube_general(search_query, api_key, max_results, order='relevance')
 
 # ======================= دوال السياق الذكي =======================
 # تخزين سياق كل مستخدم (آخر موضوع ومرجع)
@@ -610,7 +620,11 @@ def get_question_context(user_message, last_context):
 def search_youtube_with_context(query, context, api_key):
     reference = context.get("reference") if context else None
     if reference:
-        search_query = f"{query} {reference} تعليمي شرح"
+        # تحسين البحث إذا كان المرجع متعلقاً بالتسجيل العيني
+        if "تسجيل" in reference or "عيني" in reference or "السجل" in reference:
+            search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح"
+        else:
+            search_query = f"{query} {reference} تعليمي شرح"
     else:
         search_query = f"{query} وساطة عقارية سعودية تعليمي شرح"
     return search_youtube(search_query, api_key)
