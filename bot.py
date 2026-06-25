@@ -614,7 +614,7 @@ def search_youtube(query, api_key, max_results=5):
     if "عقد وساطة" in query or "عقد وساطه" in query:
         search_query = f"{query} عقد وساطة عقارية سعودي شرح نموذج"
     elif "تسجيل عيني" in query or "السجل العيني" in query or "طريقة التسجيل العيني" in query:
-        search_query = f"{query} التسجيل العيني في السجل العقاري السعودي شرح خطوات"
+        search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح خطوات"
     elif "تسجيل عقار" in query or "سجل عقاري" in query:
         search_query = f"{query} السجل العقاري السعودي إجراءات"
     elif "تملك" in query or "شراء" in query or "بيع" in query:
