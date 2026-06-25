@@ -1666,8 +1666,9 @@ def main():
         await app.bot.delete_webhook(drop_pending_updates=True)
         logger.info("✅ تم حذف أي Webhook سابق لتجنب التعارض.")
 
-    import asyncio
-    loop = asyncio.get_event_loop()
+    # إنشاء حلقة أحداث جديدة (إصلاح الخطأ)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     loop.run_until_complete(delete_webhook())
 
     logger.info("✅ البوت العقاري يعمل بنظام رباعي (Gateway → OpenRouter → Groq → Gemini) مع قاعدة السياق الذكي...")
