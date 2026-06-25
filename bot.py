@@ -1401,14 +1401,14 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not users:
         await update.message.reply_text("لا يوجد مستخدمون مسجلون.")
         return
-    msg = f"👥 **إجمالي المستخدمين:** {len(users)}\n\n"
+    msg = f"👥 إجمالي المستخدمين: {len(users)}\n\n"
     for u in users[:20]:
         username = u[1] or "بدون اسم"
         first_name = u[2] or ""
         msg += f"- @{username} ({first_name}) - رسائل: {u[4]}\n"
     if len(users) > 20:
         msg += f"\n... و {len(users)-20} مستخدمين آخرين."
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(msg)
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1666,7 +1666,7 @@ def main():
         await app.bot.delete_webhook(drop_pending_updates=True)
         logger.info("✅ تم حذف أي Webhook سابق لتجنب التعارض.")
 
-    # إنشاء حلقة أحداث جديدة (إصلاح الخطأ)
+    # إنشاء حلقة أحداث جديدة
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(delete_webhook())
