@@ -580,7 +580,7 @@ def search_youtube_channel(query, api_key, channel_id, max_results=3, order='dat
         logger.error(f"❌ خطأ في البحث في القناة {channel_id}: {e}")
         return []
 
-def search_youtube_general(query, api_key, max_results=5, order='relevance'):
+def search_youtube_general(query, api_key, max_results=5, order='date'):  # تم التعديل: order='date' بدلاً من 'relevance'
     try:
         youtube = build('youtube', 'v3', developerKey=api_key)
         request = youtube.search().list(
@@ -625,7 +625,7 @@ def search_youtube(query, api_key, max_results=5):
             if "429" in str(get_channel_id_from_handle_cached.cache_info()):
                 break
     logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
-    return search_youtube_general(search_query, api_key, max_results, order='relevance')
+    return search_youtube_general(search_query, api_key, max_results, order='date')  # تم التعديل: order='date'
 
 # ======================= دوال السياق الذكي =======================
 # تخزين سياق كل مستخدم (آخر موضوع ومرجع)
@@ -1581,15 +1581,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             else:
                 # لم يتم العثور على نتائج
-                # حفظ السؤال في جدول unanswered_questions
                 username = user.username or "لا يوجد"
                 save_unanswered_question(user_id, username, user_message)
-                
-                # إرسال رسالة الاعتذار
                 apology_msg = "نعتذر لعدم الحصول على معلومات كافيه لطلبك لكن سنسعى جاهدين لحل المشكله .. وتم ارسال ملاحظه حاليا"
                 await update.message.reply_text(apology_msg)
-                
-                # إرسال إشعار للمسؤول (اختياري)
                 if ADMIN_ID:
                     try:
                         admin_notification = f"""
