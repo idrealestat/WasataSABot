@@ -123,6 +123,15 @@ def init_db():
         reply_text TEXT,
         reply_timestamp TEXT
     )''')
+    # جدول جديد للأسئلة التي لم يتم الإجابة عليها
+    c.execute('''CREATE TABLE IF NOT EXISTS unanswered_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        username TEXT,
+        question_text TEXT,
+        timestamp TEXT,
+        is_notified INTEGER DEFAULT 0
+    )''')
     conn.commit()
     conn.close()
 
@@ -454,17 +463,58 @@ def get_all_rejections():
     conn.close()
     return rows
 
+# ======================= دوال الأسئلة غير المجاب عنها =======================
+def save_unanswered_question(user_id, username, question_text):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT INTO unanswered_questions (user_id, username, question_text, timestamp, is_notified)
+                 VALUES (?, ?, ?, ?, 0)''', (user_id, username, question_text, now))
+    conn.commit()
+    conn.close()
+
+def get_unanswered_questions(limit=50):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, user_id, username, question_text, timestamp FROM unanswered_questions WHERE is_notified = 0 ORDER BY timestamp DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def mark_unanswered_notified(question_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("UPDATE unanswered_questions SET is_notified = 1 WHERE id = ?", (question_id,))
+    conn.commit()
+    conn.close()
+
 # ======================= البحث في يوتيوب =======================
 from functools import lru_cache
 
+# قائمة القنوات الرسمية مع روابطها
+# المصادر الرسمية:
+# - الهيئة العامة للعقار: https://www.youtube.com/@Rega_ksa
+# - جمعية سكني: https://www.youtube.com/@جمعيةسكني
+# - السجل العقاري RER: https://www.youtube.com/@RERSaudi
+# - بلدي: https://www.youtube.com/@Balady_KSA
+# - إيجار: https://www.youtube.com/@Egar.Aqar.sa1
+# - عقارات السعودية: https://www.youtube.com/@saudiproperties
+# - قنوات تعليمية متخصصة:
+#   - دروس عقارية: https://www.youtube.com/@دروس_عقارية
+#   - الوساطة العقارية: https://www.youtube.com/@الوساطة_العقارية
+#   - التسجيل العيني: https://www.youtube.com/@تسجيل_عيني
+
 OFFICIAL_CHANNELS_HANDLES = [
-    "Rega_ksa",
-    "جمعيةسكني",
-    "RERSaudi",
-    "Balady_KSA",
-    "Egar.Aqar.sa1",
-    "saudiproperties",
-    "RealEstateSaudi",
+    "Rega_ksa",           # الهيئة العامة للعقار - https://www.youtube.com/@Rega_ksa
+    "جمعيةسكني",           # جمعية سكني - https://www.youtube.com/@جمعيةسكني
+    "RERSaudi",           # السجل العقاري - https://www.youtube.com/@RERSaudi
+    "Balady_KSA",         # بلدي - https://www.youtube.com/@Balady_KSA
+    "Egar.Aqar.sa1",      # إيجار - https://www.youtube.com/@Egar.Aqar.sa1
+    "saudiproperties",    # عقارات السعودية - https://www.youtube.com/@saudiproperties
+    "RealEstateSaudi",    # قناة عقارية سعودية
+    "دروس عقارية",         # قناة دروس عقارية - https://www.youtube.com/@دروس_عقارية
+    "الوساطة العقارية",    # قناة الوساطة العقارية - https://www.youtube.com/@الوساطة_العقارية
+    "تسجيل عيني",          # قناة التسجيل العيني - https://www.youtube.com/@تسجيل_عيني
 ]
 
 SECONDARY_CHANNELS_HANDLES = []
@@ -515,7 +565,7 @@ def search_youtube_channel(query, api_key, channel_id, max_results=3, order='dat
             maxResults=max_results,
             channelId=channel_id,
             order=order,
-            regionCode='SA'  # تحديد المنطقة بالسعودية
+            regionCode='SA'
         )
         response = request.execute()
         results = []
@@ -539,7 +589,7 @@ def search_youtube_general(query, api_key, max_results=5, order='relevance'):
             type='video',
             maxResults=max_results,
             order=order,
-            regionCode='SA'  # تحديد المنطقة بالسعودية
+            regionCode='SA'
         )
         response = request.execute()
         results = []
@@ -557,9 +607,9 @@ def search_youtube_general(query, api_key, max_results=5, order='relevance'):
 def search_youtube(query, api_key, max_results=5):
     if not YOUTUBE_AVAILABLE:
         return []
-    # تحسين الاستعلام بناءً على الكلمات المفتاحية مع إضافة "السعودية" لتحديد النتائج
+    # تحسين الاستعلام ليكون أكثر تحديداً
     if "تسجيل" in query or "عيني" in query or "السجل" in query:
-        search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح السعودية"
+        search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح"
     else:
         search_query = f"{query} وساطة عقارية سعودية تعليمي شرح السعودية"
     
@@ -620,7 +670,6 @@ def get_question_context(user_message, last_context):
 def search_youtube_with_context(query, context, api_key):
     reference = context.get("reference") if context else None
     if reference:
-        # تحسين البحث إذا كان المرجع متعلقاً بالتسجيل العيني
         if "تسجيل" in reference or "عيني" in reference or "السجل" in reference:
             search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح"
         else:
@@ -1529,6 +1578,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply += f"{idx}. [{video['title']}]({video['url']})\n"
                 reply += "\n_هذه الفيديوهات من يوتيوب، راجعها للاستفادة._"
                 await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+                return
+            else:
+                # لم يتم العثور على نتائج
+                # حفظ السؤال في جدول unanswered_questions
+                username = user.username or "لا يوجد"
+                save_unanswered_question(user_id, username, user_message)
+                
+                # إرسال رسالة الاعتذار
+                apology_msg = "نعتذر لعدم الحصول على معلومات كافيه لطلبك لكن سنسعى جاهدين لحل المشكله .. وتم ارسال ملاحظه حاليا"
+                await update.message.reply_text(apology_msg)
+                
+                # إرسال إشعار للمسؤول (اختياري)
+                if ADMIN_ID:
+                    try:
+                        admin_notification = f"""
+📌 **سؤال لم يتم الإجابة عليه**
+👤 المستخدم: @{username} (ID: {user_id})
+📝 السؤال: {user_message}
+📅 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+"""
+                        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notification)
+                        logger.info(f"✅ تم إرسال إشعار للمسؤول عن سؤال غير مجاب: {user_message[:50]}...")
+                    except Exception as e:
+                        logger.warning(f"⚠️ فشل إرسال إشعار للمسؤول: {e}")
                 return
         except Exception as e:
             logger.warning(f"⚠️ فشل البحث عن يوتيوب: {e}")
