@@ -491,7 +491,7 @@ def mark_unanswered_notified(question_id):
 # ======================= البحث في يوتيوب =======================
 from functools import lru_cache
 
-# قائمة القنوات الرسمية مع روابطها ومعرفاتها
+# قائمة القنوات الرسمية - استخدم فقط الأسماء اللاتينية المعروفة
 OFFICIAL_CHANNELS_HANDLES = [
     "Rega_ksa",           # الهيئة العامة للعقار - https://www.youtube.com/@Rega_ksa
     "RERSaudi",           # السجل العقاري - https://www.youtube.com/@RERSaudi
@@ -499,16 +499,13 @@ OFFICIAL_CHANNELS_HANDLES = [
     "Sakani",             # منصة سكني - https://www.youtube.com/@Sakani
     "Momah_SA",           # وزارة البلديات والإسكان - https://www.youtube.com/@Momah_SA
     "media_ksa",          # وزارة الإعلام - https://www.youtube.com/@media_ksa
-    "saudiproperties",    # النطاقات الجغرافية (عقارات السعودية) - https://www.youtube.com/@saudiproperties
+    "saudiproperties",    # النطاقات الجغرافية - https://www.youtube.com/@saudiproperties
     "aqar_sa",            # عقار - https://www.youtube.com/@aqar_sa
     "bayutksa",           # بيوت السعودية - https://www.youtube.com/@bayutksa
     "haraj-ksa",          # حراج - https://www.youtube.com/@haraj-ksa
     "dealappsa",          # ديل - https://www.youtube.com/@dealappsa
     "wasalt_sa",          # وصلت - https://www.youtube.com/@wasalt_sa
     "saudieng",           # الهيئة السعودية للمهندسين - https://www.youtube.com/@saudieng
-    "الوساطة_العقارية",    # قناة الوساطة العقارية - https://www.youtube.com/@الوساطة_العقارية
-    "دروس_عقارية",         # قناة دروس عقارية - https://www.youtube.com/@دروس_عقارية
-    "تسجيل_عيني",          # قناة التسجيل العيني - https://www.youtube.com/@تسجيل_عيني
 ]
 
 # قاموس المصادر والكلمات المفتاحية
@@ -585,22 +582,18 @@ def search_youtube_general(query, api_key, max_results=5, order='date'):
             part='snippet',
             q=query,
             type='video',
-            maxResults=max_results * 2,
+            maxResults=max_results,
             order=order,
             regionCode='SA'
         )
         response = request.execute()
         results = []
-        query_keywords = query.lower().split()
         for item in response['items']:
-            title = item['snippet']['title'].lower()
-            if any(kw in title for kw in query_keywords if len(kw) > 3):
-                video_id = item['id']['videoId']
-                url = f"https://www.youtube.com/watch?v={video_id}"
-                published_at = item['snippet']['publishedAt']
-                results.append({'title': item['snippet']['title'], 'url': url, 'published_at': published_at})
-                if len(results) >= max_results:
-                    break
+            video_id = item['id']['videoId']
+            title = item['snippet']['title']
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            published_at = item['snippet']['publishedAt']
+            results.append({'title': title, 'url': url, 'published_at': published_at})
         return results
     except Exception as e:
         logger.error(f"❌ خطأ في البحث العام: {e}")
@@ -610,8 +603,8 @@ def search_youtube(query, api_key, max_results=5):
     if not YOUTUBE_AVAILABLE:
         return []
     
-    # استخدام الاستعلام الأصلي مع إضافة "السعودية" فقط
-    search_query = f"{query} السعودية"
+    # استخدم الاستعلام كما هو بدون إضافات
+    search_query = query
     
     # البحث أولاً في القنوات الرسمية
     for handle in OFFICIAL_CHANNELS_HANDLES:
@@ -650,16 +643,12 @@ def get_question_context(user_message, last_context):
 
 def search_youtube_with_context(query, context, api_key):
     reference = context.get("reference") if context else None
-    keywords = context.get("keywords") if context else []
     
     if reference:
-        if keywords:
-            main_keyword = keywords[0] if keywords else reference
-            search_query = f"{query} {main_keyword} شرح السعودية"
-        else:
-            search_query = f"{query} {reference} شرح السعودية"
+        # استخدم المرجع لتحسين البحث
+        search_query = f"{query} {reference}"
     else:
-        search_query = f"{query} وساطة عقارية سعودية شرح"
+        search_query = query
     
     return search_youtube(search_query, api_key)
 
@@ -1554,100 +1543,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     is_educational = any(word in user_message.lower() for word in educational_keywords)
 
+    # ===== الحصول على الرد من الذكاء الاصطناعي أولاً (حتى للأسئلة التعليمية) =====
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    ai_reply = get_ai_response(user_message)
+
+    # التحقق مما إذا كان الرد اعتذارياً (غير عقاري)
+    is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in ai_reply
+    if is_apology:
+        save_rejection(user_message)
+        await update.message.reply_text(ai_reply)
+        return
+
+    # إضافة التذييل إذا لم يكن موجوداً
+    if FOOTER.strip() not in ai_reply.strip():
+        ai_reply = ai_reply + FOOTER
+
+    # حفظ السياق إذا وجد اقتراح
+    suggestion = ""
+    if "هل تريد" in ai_reply or "هل لديك" in ai_reply:
+        lines = ai_reply.split("\n")
+        for line in reversed(lines):
+            if "هل تريد" in line or "هل لديك" in line:
+                suggestion = line
+                break
+        if suggestion:
+            save_context(user_id, user_message, suggestion)
+
+    # ===== البحث عن فيديوهات يوتيوب كمكمل (وليس بديل) =====
+    youtube_reply = ""
     if is_educational:
         try:
             youtube_results = search_youtube_with_context(user_message, current_context, GOOGLE_API_KEY)
             if youtube_results:
-                reply = f"📹 **فيديوهات تعليمية مفيدة حول:** {user_message}\n\n"
+                youtube_reply = f"\n\n📹 **فيديوهات تعليمية مفيدة حول:** {user_message}\n\n"
                 for idx, video in enumerate(youtube_results, 1):
-                    reply += f"{idx}. [{video['title']}]({video['url']})\n"
-                reply += "\n_هذه الفيديوهات من يوتيوب، راجعها للاستفادة._"
-                await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
-                return
+                    youtube_reply += f"{idx}. [{video['title']}]({video['url']})\n"
+                youtube_reply += "\n_هذه الفيديوهات من يوتيوب، راجعها للاستفادة._"
             else:
-                # لم يتم العثور على نتائج
+                # إذا لم يجد نتائج، احفظ السؤال كغير مجاب
                 username = user.username or "لا يوجد"
                 save_unanswered_question(user_id, username, user_message)
-                apology_msg = "نعتذر لعدم الحصول على معلومات كافيه لطلبك لكن سنسعى جاهدين لحل المشكله .. وتم ارسال ملاحظه حاليا"
-                await update.message.reply_text(apology_msg)
+                youtube_reply = "\n\n⚠️ لم يتم العثور على فيديوهات تعليمية محدثة لهذا الموضوع. سيتم إبلاغ الفريق لتوفير محتوى أفضل."
                 if ADMIN_ID:
                     try:
                         admin_notification = f"""
-📌 **سؤال لم يتم الإجابة عليه**
+📌 **سؤال لم يتم العثور على فيديوهات له**
 👤 المستخدم: @{username} (ID: {user_id})
 📝 السؤال: {user_message}
 📅 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
                         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_notification)
-                        logger.info(f"✅ تم إرسال إشعار للمسؤول عن سؤال غير مجاب: {user_message[:50]}...")
                     except Exception as e:
                         logger.warning(f"⚠️ فشل إرسال إشعار للمسؤول: {e}")
-                return
         except Exception as e:
             logger.warning(f"⚠️ فشل البحث عن يوتيوب: {e}")
 
-    # ===== الردود الذكية =====
-    context_data = get_context(user_id)
-    if context_data:
-        last_suggestion = context_data.get("last_suggestion")
-        last_question_time = context_data.get("last_question_time")
-        if last_suggestion and last_question_time:
-            try:
-                time_diff = datetime.now() - datetime.fromisoformat(last_question_time)
-                if time_diff.total_seconds() < 300:
-                    yes_words = ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل", "اوكي", "ok", "yes", "نعم اريد", "نعم ابغى", "حسناً", "حسنا"]
-                    if any(word in user_message.lower() for word in yes_words):
-                        detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة (الشروط، الإجراءات، الخطوات، المساحات، الضرائب، التنبيهات، إلخ). قدّم الإجابة كاملة دون اختصار."
-                        reply = get_ai_response(detailed_prompt)
-                        if FOOTER.strip() not in reply.strip():
-                            reply = reply + FOOTER
-                        await update.message.reply_text(reply)
-                        clear_context(user_id)
-                        return
-            except:
-                pass
+    # ===== إرسال الرد النهائي (الذكاء الاصطناعي + الفيديوهات كمكمل) =====
+    final_reply = ai_reply + youtube_reply
 
-    try:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        reply = get_ai_response(user_message)
-
-        is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in reply
-        if is_apology:
-            save_rejection(user_message)
-            await update.message.reply_text(reply)
-            return
-
-        if FOOTER.strip() not in reply.strip():
-            reply = reply + FOOTER
-
-        suggestion = ""
-        if "هل تريد" in reply or "هل لديك" in reply:
-            lines = reply.split("\n")
-            for line in reversed(lines):
-                if "هل تريد" in line or "هل لديك" in line:
-                    suggestion = line
-                    break
-            if suggestion:
-                save_context(user_id, user_message, suggestion)
-
-        if show_header:
-            stats = get_stats()
-            total_users = stats['total_users']
-            now = datetime.now().strftime("%Y-%m-%d")
-            header = f"""
+    if show_header:
+        stats = get_stats()
+        total_users = stats['total_users']
+        now = datetime.now().strftime("%Y-%m-%d")
+        header = f"""
 🏠 **مرحباً بعودتك إلى بوت الخبير العقاري!**
 
 👥 **عدد المستخدمين الحالي:** {total_users} مستخدم
 📊 **آخر تحديث:** {now}
 
 """
-            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN)
-        else:
-            await update.message.reply_text(reply)
-
-    except Exception as e:
-        logger.error(f"❌ خطأ في handle_message: {e}")
-        await update.message.reply_text(f"❌ حدث خطأ تقني: {e}")
+        await update.message.reply_text(header + final_reply, parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(final_reply, parse_mode=ParseMode.MARKDOWN)
 
 # ======================= أمر التحقق من صلاحية المدير =======================
 async def check_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
