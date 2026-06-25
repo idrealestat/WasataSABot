@@ -123,7 +123,7 @@ def init_db():
         reply_text TEXT,
         reply_timestamp TEXT
     )''')
-    # جدول جديد للأسئلة التي لم يتم الإجابة عليها
+    # جدول للأسئلة التي لم يتم الإجابة عليها
     c.execute('''CREATE TABLE IF NOT EXISTS unanswered_questions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -491,48 +491,46 @@ def mark_unanswered_notified(question_id):
 # ======================= البحث في يوتيوب =======================
 from functools import lru_cache
 
-# قائمة القنوات الرسمية مع روابطها
-# المصادر الرسمية:
-# - الهيئة العامة للعقار: https://www.youtube.com/@Rega_ksa
-# - جمعية سكني: https://www.youtube.com/@جمعيةسكني
-# - السجل العقاري RER: https://www.youtube.com/@RERSaudi
-# - بلدي: https://www.youtube.com/@Balady_KSA
-# - إيجار: https://www.youtube.com/@Egar.Aqar.sa1
-# - عقارات السعودية: https://www.youtube.com/@saudiproperties
-# - قنوات تعليمية متخصصة:
-#   - دروس عقارية: https://www.youtube.com/@دروس_عقارية
-#   - الوساطة العقارية: https://www.youtube.com/@الوساطة_العقارية
-#   - التسجيل العيني: https://www.youtube.com/@تسجيل_عيني
-
+# قائمة القنوات الرسمية مع روابطها ومعرفاتها
 OFFICIAL_CHANNELS_HANDLES = [
     "Rega_ksa",           # الهيئة العامة للعقار - https://www.youtube.com/@Rega_ksa
-    "جمعيةسكني",           # جمعية سكني - https://www.youtube.com/@جمعيةسكني
     "RERSaudi",           # السجل العقاري - https://www.youtube.com/@RERSaudi
-    "Balady_KSA",         # بلدي - https://www.youtube.com/@Balady_KSA
-    "Egar.Aqar.sa1",      # إيجار - https://www.youtube.com/@Egar.Aqar.sa1
-    "saudiproperties",    # عقارات السعودية - https://www.youtube.com/@saudiproperties
-    "RealEstateSaudi",    # قناة عقارية سعودية
-    "دروس عقارية",         # قناة دروس عقارية - https://www.youtube.com/@دروس_عقارية
-    "الوساطة العقارية",    # قناة الوساطة العقارية - https://www.youtube.com/@الوساطة_العقارية
-    "تسجيل عيني",          # قناة التسجيل العيني - https://www.youtube.com/@تسجيل_عيني
+    "Ejar_sa",            # منصة إيجار - https://www.youtube.com/@Ejar_sa
+    "Sakani",             # منصة سكني - https://www.youtube.com/@Sakani
+    "Momah_SA",           # وزارة البلديات والإسكان - https://www.youtube.com/@Momah_SA
+    "media_ksa",          # وزارة الإعلام - https://www.youtube.com/@media_ksa
+    "saudiproperties",    # النطاقات الجغرافية (عقارات السعودية) - https://www.youtube.com/@saudiproperties
+    "aqar_sa",            # عقار - https://www.youtube.com/@aqar_sa
+    "bayutksa",           # بيوت السعودية - https://www.youtube.com/@bayutksa
+    "haraj-ksa",          # حراج - https://www.youtube.com/@haraj-ksa
+    "dealappsa",          # ديل - https://www.youtube.com/@dealappsa
+    "wasalt_sa",          # وصلت - https://www.youtube.com/@wasalt_sa
+    "saudieng",           # الهيئة السعودية للمهندسين - https://www.youtube.com/@saudieng
+    "الوساطة_العقارية",    # قناة الوساطة العقارية - https://www.youtube.com/@الوساطة_العقارية
+    "دروس_عقارية",         # قناة دروس عقارية - https://www.youtube.com/@دروس_عقارية
+    "تسجيل_عيني",          # قناة التسجيل العيني - https://www.youtube.com/@تسجيل_عيني
 ]
 
-SECONDARY_CHANNELS_HANDLES = []
-
-REAL_ESTATE_TOPICS = [
-    "منصة إيجار",
-    "بلدي",
-    "السجل العقاري",
-    "التسجيل العيني",
-    "عقود الوساطة",
-    "عقود التأجير",
-    "السجل العيني",
-    "ضريبة التصرفات العقارية",
-    "البورصة العقارية",
-    "الإفراغ",
-    "ناجز",
-    "الوكالات العقارية"
-]
+# قاموس المصادر والكلمات المفتاحية
+SOURCE_KEYWORDS = {
+    "الهيئة العامة للعقار": ["هيئة العقار", "rega", "أنظمة عقارية", "لوائح عقارية", "تراخيص عقارية", "ممارس عقاري", "ضوابط عقارية"],
+    "السجل العقاري (RER)": ["سجل عقاري", "تسجيل عيني", "صك", "ملكية", "نقل ملكية", "إفراغ", "تسجيل عقار", "rer", "السجل العيني"],
+    "منصة إيجار": ["إيجار", "عقد إيجار", "توثيق إيجار", "منصة إيجار", "ejar", "عقود إيجارية", "إيجار سكني", "إيجار تجاري", "المنصة الإلكترونية", "تسجيل عقد إيجار", "خدمات إيجار"],
+    "منصة سكني": ["سكني", "تمويل سكني", "قرض عقاري", "دعم سكني", "sakani", "إسكان", "التمويل المدعوم", "الدفعة الأولى", "القسط الشهري"],
+    "وزارة البلديات والإسكان": ["بلدية", "تراخيص بناء", "رخصة بناء", "اشتراطات بناء", "momah", "تخطيط", "أنظمة البناء", "رخصة إشغال", "اللوائح البلدية"],
+    "وزارة الإعلام": ["إعلام", "تراخيص إعلامية", "موثوق", "رخصة موثوق", "تنظيم إعلامي", "الإعلانات العقارية", "منصة إعلامية"],
+    "النطاقات الجغرافية (عقارات السعودية)": ["نطاقات جغرافية", "تملك غير السعوديين", "saudiproperties", "مناطق التملك", "تملك الأجانب", "خريطة النطاقات", "تسجيل عيني", "تملك الخليجيين", "تملك الأجانب في السعودية", "ضوابط التملك"],
+    "عقار": ["عقار", "أسعار عقار", "سوق عقاري", "aqar.fm", "شقة للبيع", "فيلا للبيع", "مخططات", "أراضي", "مؤشرات عقارية"],
+    "بيوت السعودية": ["بيوت", "bayut", "عقار سعودي", "شقق للبيع", "فلل للبيع", "مخططات", "عقارات السعودية", "أسعار البيوت"],
+    "حراج": ["حراج", "haraj", "عقار حراج", "بيع عقار", "شراء عقار", "مستعمل", "حراج العقار", "إعلانات عقارية"],
+    "ديل": ["ديل", "dealapp", "عقار ديل", "صفقات عقارية", "عقارات", "تسويق عقاري"],
+    "وصلت": ["وصلت", "wasalt", "عقار وصلت", "تسويق عقاري", "خدمات عقارية"],
+    "المكاتب الهندسية": ["مكاتب هندسية", "استشارات عقارية", "تقييم عقاري", "دراسات جدوى", "هندسة عقارية", "استشارات إنشائية", "الفحص الهندسي"],
+    "الهيئة السعودية للمهندسين": ["مهندسين", "هندسة عقارية", "تراخيص هندسية", "معايير هندسية", "كود البناء السعودي"],
+    "الوساطة العقارية": ["وساطة", "عقد وساطة", "عمولة وساطة", "وسيط عقاري", "عقد وساطة عقارية", "ضوابط الوساطة", "أخلاقيات الوساطة"],
+    "دروس عقارية": ["شرح عقار", "دروس عقارية", "تعليم عقار", "مبادئ عقارية", "مفاهيم عقارية", "محاضرات عقارية"],
+    "التسجيل العيني": ["تسجيل عيني", "طريقة التسجيل العيني", "إجراءات التسجيل العيني", "السجل العيني", "تسجيل العقار", "نظام التسجيل العيني"]
+}
 
 @lru_cache(maxsize=32)
 def get_channel_id_from_handle_cached(handle, api_key):
@@ -580,25 +578,29 @@ def search_youtube_channel(query, api_key, channel_id, max_results=3, order='dat
         logger.error(f"❌ خطأ في البحث في القناة {channel_id}: {e}")
         return []
 
-def search_youtube_general(query, api_key, max_results=5, order='date'):  # تم التعديل: order='date' بدلاً من 'relevance'
+def search_youtube_general(query, api_key, max_results=5, order='date'):
     try:
         youtube = build('youtube', 'v3', developerKey=api_key)
         request = youtube.search().list(
             part='snippet',
             q=query,
             type='video',
-            maxResults=max_results,
+            maxResults=max_results * 2,
             order=order,
             regionCode='SA'
         )
         response = request.execute()
         results = []
+        query_keywords = query.lower().split()
         for item in response['items']:
-            video_id = item['id']['videoId']
-            title = item['snippet']['title']
-            url = f"https://www.youtube.com/watch?v={video_id}"
-            published_at = item['snippet']['publishedAt']
-            results.append({'title': title, 'url': url, 'published_at': published_at})
+            title = item['snippet']['title'].lower()
+            if any(kw in title for kw in query_keywords if len(kw) > 3):
+                video_id = item['id']['videoId']
+                url = f"https://www.youtube.com/watch?v={video_id}"
+                published_at = item['snippet']['publishedAt']
+                results.append({'title': item['snippet']['title'], 'url': url, 'published_at': published_at})
+                if len(results) >= max_results:
+                    break
         return results
     except Exception as e:
         logger.error(f"❌ خطأ في البحث العام: {e}")
@@ -607,11 +609,9 @@ def search_youtube_general(query, api_key, max_results=5, order='date'):  # تم
 def search_youtube(query, api_key, max_results=5):
     if not YOUTUBE_AVAILABLE:
         return []
-    # تحسين الاستعلام ليكون أكثر تحديداً
-    if "تسجيل" in query or "عيني" in query or "السجل" in query:
-        search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح"
-    else:
-        search_query = f"{query} وساطة عقارية سعودية تعليمي شرح السعودية"
+    
+    # استخدام الاستعلام الأصلي مع إضافة "السعودية" فقط
+    search_query = f"{query} السعودية"
     
     # البحث أولاً في القنوات الرسمية
     for handle in OFFICIAL_CHANNELS_HANDLES:
@@ -624,8 +624,9 @@ def search_youtube(query, api_key, max_results=5):
         else:
             if "429" in str(get_channel_id_from_handle_cached.cache_info()):
                 break
+    
     logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
-    return search_youtube_general(search_query, api_key, max_results, order='date')  # تم التعديل: order='date'
+    return search_youtube_general(search_query, api_key, max_results, order='date')
 
 # ======================= دوال السياق الذكي =======================
 # تخزين سياق كل مستخدم (آخر موضوع ومرجع)
@@ -633,49 +634,33 @@ user_context_storage = {}
 
 def get_question_context(user_message, last_context):
     """
-    تحليل السؤال لتحديد السياق بناءً على المصادر الـ 16 المذكورة في البرومبت.
+    تحليل السؤال لتحديد السياق بناءً على الكلمات المفتاحية والمصادر.
     """
-    # قائمة المصادر الـ 16 (مأخوذة من البرومبت)
-    sources_list = [
-        "الهيئة العامة للعقار", "rega.gov.sa",
-        "منصة إيجار", "ejar.sa",
-        "منصة سكني", "sakani.sa",
-        "البلديات", "momah.gov.sa",
-        "وزارة الإعلام", "media.gov.sa",
-        "الجريدة الرسمية", "أم القرى",
-        "الحسابات الرسمية الموثقة",
-        "نظام الوساطة العقارية", "المرسوم الملكي رقم م/130",
-        "اللائحة التنظيمية للتسويق والإعلانات العقارية",
-        "نظام تملّك غير السعوديين للعقار",
-        "ضريبة التصرفات العقارية", "zatca.gov.sa",
-        "عقار", "aqar.fm",
-        "ديل", "dealapp.sa",
-        "وصلت", "wasalt.sa",
-        "بيوت السعودية", "bayut.sa",
-        "حراج", "haraj.com.sa",
-        "السجل العقاري", "التسجيل العيني", "RER",
-        "عقد وساطة", "وساطة",
-        "عقد إيجار", "إيجار"
-    ]
+    # البحث في قاموس المصادر والكلمات المفتاحية
+    for source, keywords in SOURCE_KEYWORDS.items():
+        for kw in keywords:
+            if kw in user_message.lower():
+                return {"type": "independent", "reference": source, "keywords": keywords}
     
-    for source in sources_list:
-        if source in user_message:
-            return {"type": "independent", "reference": source}
-    
+    # إذا لم يتم العثور على مصدر محدد
     if last_context and last_context.get("reference"):
-        return {"type": "follow_up", "reference": last_context.get("reference")}
+        return {"type": "follow_up", "reference": last_context.get("reference"), "keywords": last_context.get("keywords", [])}
     
-    return {"type": "independent", "reference": None}
+    return {"type": "independent", "reference": None, "keywords": []}
 
 def search_youtube_with_context(query, context, api_key):
     reference = context.get("reference") if context else None
+    keywords = context.get("keywords") if context else []
+    
     if reference:
-        if "تسجيل" in reference or "عيني" in reference or "السجل" in reference:
-            search_query = f"{query} طريقة التسجيل العيني في السجل العقاري السعودي شرح"
+        if keywords:
+            main_keyword = keywords[0] if keywords else reference
+            search_query = f"{query} {main_keyword} شرح السعودية"
         else:
-            search_query = f"{query} {reference} تعليمي شرح"
+            search_query = f"{query} {reference} شرح السعودية"
     else:
-        search_query = f"{query} وساطة عقارية سعودية تعليمي شرح"
+        search_query = f"{query} وساطة عقارية سعودية شرح"
+    
     return search_youtube(search_query, api_key)
 
 # ======================= البرومبت الأساسي =======================
