@@ -987,7 +987,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
         await query.edit_message_text(zones_msg, parse_mode=ParseMode.MARKDOWN)
 
-# ======================= معالج الرسائل الرئيسي (المعدل) =======================
+# ======================= معالج الرسائل الرئيسي =======================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -997,21 +997,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         logger.info(f"📩 رسالة من @{user.username} (ID: {user_id}): {user_message[:50]}...")
 
-        # 1. تسجيل المستخدم
         UserRepository.save(user_id, user.username, user.first_name)
         UserRepository.update_activity(user_id)
 
-        # 2. تسجيل السؤال والكلمات المفتاحية
         QuestionRepository.save(user_message)
         keywords = [w for w in user_message.split() if len(w) > 2]
         KeywordRepository.save(keywords)
 
-        # 3. التحقق من طلب تأكيد سري
         if user_id in pending_secret_requests:
             await handle_secret_confirmation(update, context)
             return
 
-        # 4. السياق الذكي - معالجة الردود القصيرة مثل "نعم"
         context_data = context_service.get(user_id)
         should_use_context = False
         
@@ -1043,21 +1039,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("❌ عذراً، حدث خطأ في معالجة طلبك. يرجى المحاولة لاحقاً.")
                     return
 
-        # 5. الحصول على الرد الذكي (بالتوازي مع يوتيوب)
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
         system_prompt = rules_service.get_active_prompt()
         ai_service.system_prompt = system_prompt
 
-        # ======== تنفيذ المهام المتوازية ========
         ai_reply = ""
         youtube_results = []
         
         try:
-            # مهمة الذكاء الاصطناعي
             ai_task = asyncio.create_task(asyncio.to_thread(ai_service.generate, user_message))
             
-            # مهمة يوتيوب (إذا كان السؤال تعليمياً)
             youtube_task = None
             is_educational = context_service.is_educational(user_message)
             if is_educational:
@@ -1065,14 +1057,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     asyncio.to_thread(youtube_service.search, user_message, 5)
                 )
             
-            # انتظار رد الذكاء الاصطناعي
             try:
                 ai_reply = await ai_task
             except Exception as e:
                 logger.error(f"❌ فشل توليد الرد من AI: {e}")
                 ai_reply = "❌ عذراً، حدث خطأ في معالجة طلبك. يرجى المحاولة لاحقاً."
             
-            # انتظار نتائج يوتيوب (إذا كانت المهمة موجودة)
             if youtube_task:
                 try:
                     youtube_results = await youtube_task
@@ -1084,17 +1074,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"❌ خطأ في المهام المتوازية: {e}")
             ai_reply = "❌ عذراً، حدث خطأ داخلي. يرجى المحاولة لاحقاً."
 
-        # 6. التحقق من الرد الاعتذاري (غير عقاري)
         if "أنا مختص بالشأن العقاري السعودي فقط" in ai_reply:
             RejectionRepository.save(user_message)
             await update.message.reply_text(ai_reply)
             return
 
-        # 7. إضافة التذييل
         if FOOTER.strip() not in ai_reply.strip():
             ai_reply = ai_reply + FOOTER
 
-        # 8. حفظ السياق إذا وجد اقتراح
         suggestion = ""
         if "هل تريد" in ai_reply or "هل لديك" in ai_reply:
             lines = ai_reply.split("\n")
@@ -1105,7 +1092,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if suggestion:
                 context_service.update(user_id, user_message, suggestion)
 
-        # 9. دمج فيديوهات يوتيوب
         youtube_reply = ""
         if youtube_results and len(youtube_results) > 0:
             youtube_reply = f"\n\n📹 **فيديوهات تعليمية مفيدة حول:** {user_message}\n\n"
@@ -1113,7 +1099,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 youtube_reply += f"{idx}. [{video['title']}]({video['url']})\n"
             youtube_reply += "\n_هذه الفيديوهات من يوتيوب، راجعها للاستفادة._"
         elif context_service.is_educational(user_message):
-            # إذا كان السؤال تعليمياً ولم نجد نتائج
             username = user.username or "لا يوجد"
             UnansweredRepository.save(user_id, username, user_message)
             youtube_reply = "\n\n⚠️ لم يتم العثور على فيديوهات تعليمية محدثة لهذا الموضوع. سيتم إبلاغ الفريق لتوفير محتوى أفضل."
@@ -1129,10 +1114,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.warning(f"⚠️ فشل إرسال إشعار للمسؤول: {e}")
 
-        # 10. الرد النهائي
         final_reply = ai_reply + youtube_reply
 
-        # 11. إضافة الهيدر إذا غاب المستخدم أكثر من ساعتين
         last_activity = UserRepository.get_last_activity(user_id)
         show_header = False
         if last_activity:
@@ -1159,7 +1142,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"✅ تم إرسال الرد لـ {user_id}")
         except Exception as e:
             logger.error(f"❌ فشل إرسال الرد: {e}")
-            # محاولة إرسال الرد بدون Markdown
             try:
                 await update.message.reply_text(final_reply)
             except:
@@ -1599,7 +1581,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("✅ البوت العقاري يعمل بالنسخة المُعاد بناؤها مع جميع التعديلات...")
-    app.run_polling()
+    
+    # ======== التعديل الأساسي لحل مشكلة Conflict ========
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
