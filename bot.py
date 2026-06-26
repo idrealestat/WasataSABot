@@ -559,30 +559,34 @@ class YouTubeService:
             logger.warning("⚠️ YouTube غير متاح أو المفتاح غير مضبوط")
             return []
 
-        cache_key = f"{query}_{max_results}"
-        cached = YouTubeCacheRepository.get(cache_key)
-        if cached is not None:
-            logger.info(f"✅ استخدام التخزين المؤقت لـ: {query}")
-            return cached
+        try:
+            cache_key = f"{query}_{max_results}"
+            cached = YouTubeCacheRepository.get(cache_key)
+            if cached is not None:
+                logger.info(f"✅ استخدام التخزين المؤقت لـ: {query}")
+                return cached
 
-        search_query = self._build_search_query(query)
-        results = self._search_official_channels(search_query, max_results)
+            search_query = self._build_search_query(query)
+            results = self._search_official_channels(search_query, max_results)
 
-        if not results:
-            logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
-            results = self._search_general(search_query, max_results)
+            if not results:
+                logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
+                results = self._search_general(search_query, max_results)
 
-        if not results:
-            logger.info("🔍 لم يتم العثور في البحث العام، جاري بحث موسع...")
-            results = self._search_general(search_query, max_results * 2)
-            results = results[:max_results]
+            if not results:
+                logger.info("🔍 لم يتم العثور في البحث العام، جاري بحث موسع...")
+                results = self._search_general(search_query, max_results * 2)
+                results = results[:max_results]
 
-        if results:
-            YouTubeCacheRepository.save(cache_key, results)
-        else:
-            logger.warning(f"⚠️ لم يتم العثور على فيديوهات لـ: {query}")
+            if results:
+                YouTubeCacheRepository.save(cache_key, results)
+            else:
+                logger.warning(f"⚠️ لم يتم العثور على فيديوهات لـ: {query}")
 
-        return results
+            return results
+        except Exception as e:
+            logger.error(f"❌ خطأ في YouTubeService.search: {e}")
+            return []
 
     def _build_search_query(self, query: str) -> str:
         for topic, optimized in self.TOPIC_QUERIES.items():
@@ -983,86 +987,133 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
         await query.edit_message_text(zones_msg, parse_mode=ParseMode.MARKDOWN)
 
-# ======================= معالج الرسائل الرئيسي =======================
+# ======================= معالج الرسائل الرئيسي (المعدل) =======================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    user_message = update.message.text.strip()
+    try:
+        user = update.effective_user
+        user_id = user.id
+        user_message = update.message.text.strip()
+        
+        logger.info(f"📩 رسالة من @{user.username} (ID: {user_id}): {user_message[:50]}...")
 
-    UserRepository.save(user_id, user.username, user.first_name)
-    UserRepository.update_activity(user_id)
+        # 1. تسجيل المستخدم
+        UserRepository.save(user_id, user.username, user.first_name)
+        UserRepository.update_activity(user_id)
 
-    QuestionRepository.save(user_message)
-    keywords = [w for w in user_message.split() if len(w) > 2]
-    KeywordRepository.save(keywords)
+        # 2. تسجيل السؤال والكلمات المفتاحية
+        QuestionRepository.save(user_message)
+        keywords = [w for w in user_message.split() if len(w) > 2]
+        KeywordRepository.save(keywords)
 
-    if user_id in pending_secret_requests:
-        await handle_secret_confirmation(update, context)
-        return
+        # 3. التحقق من طلب تأكيد سري
+        if user_id in pending_secret_requests:
+            await handle_secret_confirmation(update, context)
+            return
 
-    context_data = context_service.get(user_id)
-    if context_data:
-        last_suggestion = context_data.get("last_suggestion")
-        last_question_time = context_data.get("last_question_time")
-        if last_suggestion and last_question_time:
+        # 4. السياق الذكي - معالجة الردود القصيرة مثل "نعم"
+        context_data = context_service.get(user_id)
+        should_use_context = False
+        
+        if context_data:
+            last_suggestion = context_data.get("last_suggestion")
+            last_question_time = context_data.get("last_question_time")
+            if last_suggestion and last_question_time:
+                try:
+                    time_diff = datetime.now() - datetime.fromisoformat(last_question_time)
+                    if time_diff.total_seconds() < 300:
+                        should_use_context = True
+                except Exception as e:
+                    logger.warning(f"⚠️ خطأ في تحليل وقت السياق: {e}")
+
+        if should_use_context:
+            yes_words = ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل", "اوكي", "ok", "yes", "نعم اريد", "حسناً", "حسنا"]
+            if any(w in user_message.lower() for w in yes_words):
+                logger.info(f"🔄 معالجة رد سياقي لـ {user_id}")
+                detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة (الشروط، الإجراءات، الخطوات، المساحات، الضرائب، التنبيهات، إلخ). قدّم الإجابة كاملة دون اختصار."
+                try:
+                    reply = ai_service.generate(detailed_prompt)
+                    if FOOTER.strip() not in reply.strip():
+                        reply = reply + FOOTER
+                    await update.message.reply_text(reply)
+                    context_service.clear(user_id)
+                    return
+                except Exception as e:
+                    logger.error(f"❌ فشل في الرد السياقي: {e}")
+                    await update.message.reply_text("❌ عذراً، حدث خطأ في معالجة طلبك. يرجى المحاولة لاحقاً.")
+                    return
+
+        # 5. الحصول على الرد الذكي (بالتوازي مع يوتيوب)
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+        system_prompt = rules_service.get_active_prompt()
+        ai_service.system_prompt = system_prompt
+
+        # ======== تنفيذ المهام المتوازية ========
+        ai_reply = ""
+        youtube_results = []
+        
+        try:
+            # مهمة الذكاء الاصطناعي
+            ai_task = asyncio.create_task(asyncio.to_thread(ai_service.generate, user_message))
+            
+            # مهمة يوتيوب (إذا كان السؤال تعليمياً)
+            youtube_task = None
+            is_educational = context_service.is_educational(user_message)
+            if is_educational:
+                youtube_task = asyncio.create_task(
+                    asyncio.to_thread(youtube_service.search, user_message, 5)
+                )
+            
+            # انتظار رد الذكاء الاصطناعي
             try:
-                time_diff = datetime.now() - datetime.fromisoformat(last_question_time)
-                if time_diff.total_seconds() < 300:
-                    yes_words = ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل", "اوكي", "ok", "yes", "نعم اريد", "حسناً", "حسنا"]
-                    if any(w in user_message.lower() for w in yes_words):
-                        detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة (الشروط، الإجراءات، الخطوات، المساحات، الضرائب، التنبيهات، إلخ). قدّم الإجابة كاملة دون اختصار."
-                        reply = ai_service.generate(detailed_prompt)
-                        if FOOTER.strip() not in reply.strip():
-                            reply = reply + FOOTER
-                        await update.message.reply_text(reply)
-                        context_service.clear(user_id)
-                        return
-            except:
-                pass
+                ai_reply = await ai_task
+            except Exception as e:
+                logger.error(f"❌ فشل توليد الرد من AI: {e}")
+                ai_reply = "❌ عذراً، حدث خطأ في معالجة طلبك. يرجى المحاولة لاحقاً."
+            
+            # انتظار نتائج يوتيوب (إذا كانت المهمة موجودة)
+            if youtube_task:
+                try:
+                    youtube_results = await youtube_task
+                except Exception as e:
+                    logger.error(f"❌ فشل البحث في يوتيوب: {e}")
+                    youtube_results = []
+                    
+        except Exception as e:
+            logger.error(f"❌ خطأ في المهام المتوازية: {e}")
+            ai_reply = "❌ عذراً، حدث خطأ داخلي. يرجى المحاولة لاحقاً."
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        # 6. التحقق من الرد الاعتذاري (غير عقاري)
+        if "أنا مختص بالشأن العقاري السعودي فقط" in ai_reply:
+            RejectionRepository.save(user_message)
+            await update.message.reply_text(ai_reply)
+            return
 
-    system_prompt = rules_service.get_active_prompt()
-    ai_service.system_prompt = system_prompt
+        # 7. إضافة التذييل
+        if FOOTER.strip() not in ai_reply.strip():
+            ai_reply = ai_reply + FOOTER
 
-    ai_task = asyncio.create_task(asyncio.to_thread(ai_service.generate, user_message))
-    youtube_task = None
+        # 8. حفظ السياق إذا وجد اقتراح
+        suggestion = ""
+        if "هل تريد" in ai_reply or "هل لديك" in ai_reply:
+            lines = ai_reply.split("\n")
+            for line in reversed(lines):
+                if "هل تريد" in line or "هل لديك" in line:
+                    suggestion = line
+                    break
+            if suggestion:
+                context_service.update(user_id, user_message, suggestion)
 
-    if context_service.is_educational(user_message):
-        youtube_task = asyncio.create_task(
-            asyncio.to_thread(youtube_service.search, user_message, 5)
-        )
-
-    ai_reply = await ai_task
-    youtube_results = await youtube_task if youtube_task else []
-
-    if "أنا مختص بالشأن العقاري السعودي فقط" in ai_reply:
-        RejectionRepository.save(user_message)
-        await update.message.reply_text(ai_reply)
-        return
-
-    if FOOTER.strip() not in ai_reply.strip():
-        ai_reply = ai_reply + FOOTER
-
-    suggestion = ""
-    if "هل تريد" in ai_reply or "هل لديك" in ai_reply:
-        lines = ai_reply.split("\n")
-        for line in reversed(lines):
-            if "هل تريد" in line or "هل لديك" in line:
-                suggestion = line
-                break
-        if suggestion:
-            context_service.update(user_id, user_message, suggestion)
-
-    youtube_reply = ""
-    if youtube_results:
-        youtube_reply = f"\n\n📹 **فيديوهات تعليمية مفيدة حول:** {user_message}\n\n"
-        for idx, video in enumerate(youtube_results[:5], 1):
-            youtube_reply += f"{idx}. [{video['title']}]({video['url']})\n"
-        youtube_reply += "\n_هذه الفيديوهات من يوتيوب، راجعها للاستفادة._"
-    else:
-        if context_service.is_educational(user_message):
+        # 9. دمج فيديوهات يوتيوب
+        youtube_reply = ""
+        if youtube_results and len(youtube_results) > 0:
+            youtube_reply = f"\n\n📹 **فيديوهات تعليمية مفيدة حول:** {user_message}\n\n"
+            for idx, video in enumerate(youtube_results[:5], 1):
+                youtube_reply += f"{idx}. [{video['title']}]({video['url']})\n"
+            youtube_reply += "\n_هذه الفيديوهات من يوتيوب، راجعها للاستفادة._"
+        elif context_service.is_educational(user_message):
+            # إذا كان السؤال تعليمياً ولم نجد نتائج
             username = user.username or "لا يوجد"
             UnansweredRepository.save(user_id, username, user_message)
             youtube_reply = "\n\n⚠️ لم يتم العثور على فيديوهات تعليمية محدثة لهذا الموضوع. سيتم إبلاغ الفريق لتوفير محتوى أفضل."
@@ -1078,30 +1129,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.warning(f"⚠️ فشل إرسال إشعار للمسؤول: {e}")
 
-    final_reply = ai_reply + youtube_reply
+        # 10. الرد النهائي
+        final_reply = ai_reply + youtube_reply
 
-    last_activity = UserRepository.get_last_activity(user_id)
-    show_header = False
-    if last_activity:
+        # 11. إضافة الهيدر إذا غاب المستخدم أكثر من ساعتين
+        last_activity = UserRepository.get_last_activity(user_id)
+        show_header = False
+        if last_activity:
+            try:
+                last_time = datetime.fromisoformat(last_activity)
+                if (datetime.now() - last_time).total_seconds() > 7200:
+                    show_header = True
+            except:
+                pass
+
         try:
-            last_time = datetime.fromisoformat(last_activity)
-            if (datetime.now() - last_time).total_seconds() > 7200:
-                show_header = True
-        except:
-            pass
-
-    if show_header:
-        stats = StatsRepository.get_stats()
-        header = f"""
+            if show_header:
+                stats = StatsRepository.get_stats()
+                header = f"""
 🏠 **مرحباً بعودتك إلى بوت الخبير العقاري!**
 
 👥 **عدد المستخدمين الحالي:** {stats['total_users']} مستخدم
 📊 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d')}
 
 """
-        await update.message.reply_text(header + final_reply, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.message.reply_text(final_reply, parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(header + final_reply, parse_mode=ParseMode.MARKDOWN)
+            else:
+                await update.message.reply_text(final_reply, parse_mode=ParseMode.MARKDOWN)
+            logger.info(f"✅ تم إرسال الرد لـ {user_id}")
+        except Exception as e:
+            logger.error(f"❌ فشل إرسال الرد: {e}")
+            # محاولة إرسال الرد بدون Markdown
+            try:
+                await update.message.reply_text(final_reply)
+            except:
+                await update.message.reply_text("❌ عذراً، حدث خطأ في إرسال الرد.")
+
+    except Exception as e:
+        logger.error(f"❌ خطأ فادح في handle_message: {e}", exc_info=True)
+        try:
+            await update.message.reply_text("❌ عذراً، حدث خطأ داخلي في معالجة طلبك. يرجى المحاولة لاحقاً.")
+        except:
+            pass
 
 # ======================= أوامر المدراء =======================
 
