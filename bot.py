@@ -4,10 +4,7 @@ import sqlite3
 import csv
 import io
 import asyncio
-import json
-from functools import lru_cache
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -428,7 +425,11 @@ class StatsRepository:
 
         week_ago = (datetime.now() - timedelta(days=7)).isoformat()
         c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (week_ago,))
-        active_users = c.fetchone()[0]
+        active_week = c.fetchone()[0]
+
+        five_min_ago = (datetime.now() - timedelta(minutes=5)).isoformat()
+        c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (five_min_ago,))
+        active_now = c.fetchone()[0]
 
         c.execute("SELECT SUM(total_messages) FROM users")
         total_messages = c.fetchone()[0] or 0
@@ -441,7 +442,8 @@ class StatsRepository:
 
         return {
             "total_users": total_users,
-            "active_users": active_users,
+            "active_week": active_week,
+            "active_now": active_now,
             "total_messages": total_messages,
             "total_rejections": total_rejections,
             "rejection_rate": round(rejection_rate, 2)
@@ -520,8 +522,9 @@ class AIService:
 class YouTubeService:
     """خدمة البحث في يوتيوب مع تخزين مؤقت واستعلامات محسّنة."""
 
+    # ======== التعديل: قنوات محدثة (REGA_KSA و RERSaudi فقط للتسجيل العيني) ========
     OFFICIAL_CHANNELS = [
-        {"handle": "Rega_ksa", "name": "الهيئة العامة للعقار"},
+        {"handle": "REGA_KSA", "name": "الهيئة العامة للعقار"},
         {"handle": "RERSaudi", "name": "السجل العقاري"},
         {"handle": "Ejar_sa", "name": "منصة إيجار"},
         {"handle": "Sakani", "name": "منصة سكني"},
@@ -535,7 +538,7 @@ class YouTubeService:
         {"handle": "wasalt_sa", "name": "وصلت"},
     ]
 
-    # ======== التعديل: توسيع الكلمات المفتاحية لتشمل أسلوب، تفهيم، دورة ========
+    # ======== التعديل: استعلامات محسّنة للتسجيل العيني ========
     TOPIC_QUERIES = {
         "تسجيل عيني": "طريقة التسجيل العيني في السجل العقاري السعودي شرح خطوات",
         "السجل العقاري": "السجل العقاري السعودي إجراءات التسجيل العيني شرح",
@@ -569,15 +572,13 @@ class YouTubeService:
 
         search_query = self._build_search_query(query)
 
-        # محاولة البحث في القنوات الرسمية
+        # ======== التعديل: البحث في القنوات الرسمية مع order='date' ========
         results = self._search_official_channels(search_query, max_results)
 
-        # إذا لم توجد نتائج، بحث عام مباشر
         if not results:
             logger.info("🔍 لم يتم العثور في القنوات المحددة، جاري البحث العام...")
             results = self._search_general(search_query, max_results)
 
-        # إذا لم توجد نتائج حتى بعد البحث العام، جرب بحثاً أوسع
         if not results:
             logger.info("🔍 لم يتم العثور في البحث العام، جاري بحث موسع...")
             results = self._search_general(search_query, max_results * 2)
@@ -602,7 +603,8 @@ class YouTubeService:
             try:
                 channel_id = self._get_channel_id(channel["handle"])
                 if channel_id:
-                    videos = self._search_channel(query, channel_id, max_results)
+                    # ======== التعديل: استخدام order='date' ========
+                    videos = self._search_channel(query, channel_id, max_results, order='date')
                     results.extend(videos)
                     if len(results) >= max_results:
                         break
@@ -632,7 +634,7 @@ class YouTubeService:
                 logger.error(f"❌ خطأ في استخراج Channel ID: {e}")
             return None
 
-    def _search_channel(self, query: str, channel_id: str, max_results: int) -> List[Dict]:
+    def _search_channel(self, query: str, channel_id: str, max_results: int, order: str = 'date') -> List[Dict]:
         try:
             youtube = build('youtube', 'v3', developerKey=self.api_key)
             request = youtube.search().list(
@@ -641,7 +643,7 @@ class YouTubeService:
                 type='video',
                 maxResults=max_results,
                 channelId=channel_id,
-                order='relevance',
+                order=order,
                 regionCode='SA'
             )
             response = request.execute()
@@ -666,7 +668,7 @@ class YouTubeService:
                 q=query,
                 type='video',
                 maxResults=max_results * 2,
-                order='relevance',
+                order='date',
                 regionCode='SA'
             )
             response = request.execute()
@@ -858,6 +860,13 @@ BASE_SYSTEM_PROMPT = """
   أضف المرجع: بوابة النطاقات الجغرافية (https://saudiproperties.rega.gov.sa/zones).
 - اذكر جميع المصادر في التفصيل مع الروابط.
 
+🔴 **قاعدة النسخ الحرفي من المصدر:**
+في قسم "التفصيل:"، يجب نسخ النص الرسمي من المصدر بين علامتي تنصيص كما هو دون اختصار أو تعديل، مع ذكر اسم المصدر ورابطه وتاريخ النص.
+
+🔴 **قاعدة الجمع بين المصادر:**
+يجب البحث في جميع المصادر الـ 17 المذكورة، ثم جمع المعلومات منها جميعاً.
+إذا وجدت معلومة في مصدر رسمي (مثل وزارة الإعلام) تختلف عن مصادر أخرى، يجب ذكرها في التفصيل مع التحذير المناسب.
+
 🔴 **قاعدة عرض العناصر السبعة (للإجراءات):**
 إذا كان السؤال يحتوي على كلمات مثل: "كيف"، "طريقة"، "إجراءات"، "خطوات"، "متطلبات"، "شروط":
 - اعرض العناصر التالية تلقائياً في قسم "التفصيل":
@@ -941,7 +950,7 @@ https://linktr.ee/sultan.al3siry
 **"الوسيط هو المسؤول الوحيد عن امتثال أعماله للأنظمة والتشريعات السعودية"**
 """
 
-# ======================= أمر /start =======================
+# ======================= أمر /start (مع الأزرار والإحصائيات الكاملة) =======================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -956,14 +965,25 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # ======== إعادة الإحصائيات الكاملة كما كانت في النسخة السابقة ========
     msg = f"""
 📊 **إحصائيات البوت:**
 ━━━━━━━━━━━━━━━━━━━
-👥 **جميع المستخدمين:** {stats['total_users']}
-📈 **النشطين (آخر 7 أيام):** {stats['active_users']}
+🟢 **المستخدمين الحاليين (آخر 5 دقائق):** {stats['active_now']}
+📈 **النشطين (آخر 7 أيام):** {stats['active_week']}
+📊 **جميع المستخدمين (منذ البداية):** {stats['total_users']}
 ━━━━━━━━━━━━━━━━━━━
 
 🔒 تطمن، لا يمكن لأحد الاطلاع على محادثاتك.
+خصوصيتك أمانة في أعناقنا.
+
+📢 **للتواصل مع المسؤول:**
+- /report للإبلاغ عن مشكلة
+- /suggest لتقديم اقتراح
+- /complain لتقديم شكوى
+
+*استخدم الأمر متبوعاً برسالتك، مثال:*
+/suggest أتمنى إضافة خاصية كذا
 
 ❓ **سم طال عمرك.. هل لديك سؤال عقاري؟**
 """
@@ -1137,7 +1157,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **إحصائيات البوت العقاري**
 
 👥 **إجمالي المستخدمين:** {stats['total_users']}
-🟢 **نشطاء آخر 7 أيام:** {stats['active_users']}
+🟢 **نشطاء آخر 7 أيام:** {stats['active_week']}
+🟢 **نشطاء الآن (آخر 5 دقائق):** {stats['active_now']}
 💬 **إجمالي الرسائل:** {stats['total_messages']}
 🚫 **حالات الرفض:** {stats['total_rejections']}
 📉 **معدل الرفض:** {stats['rejection_rate']}%
