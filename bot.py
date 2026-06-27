@@ -22,7 +22,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-FREELLM_API_KEY = os.getenv("FREELLM_API_KEY")  # الموزع الجديد
+FREELLM_API_KEY = os.getenv("FREELLM_API_KEY")
 
 # ======================= إعداد التسجيل =======================
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 client_groq = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
 client_gemini = OpenAI(api_key=GOOGLE_API_KEY, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
 client_openrouter = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1") if OPENROUTER_API_KEY else None
-client_freellm = OpenAI(api_key=FREELLM_API_KEY, base_url="https://api.freellm.com/v1") if FREELLM_API_KEY else None  # مثال
+client_freellm = OpenAI(api_key=FREELLM_API_KEY, base_url="https://api.freellm.com/v1") if FREELLM_API_KEY else None
 
 # ======================= قاعدة البيانات =======================
 DB_PATH = "bot_data.db"
@@ -52,7 +52,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS custom_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, rule_name TEXT UNIQUE, rule_text TEXT, created_by INTEGER, created_date TEXT, is_active INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS unanswered_questions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, username TEXT, question_text TEXT, timestamp TEXT, is_notified INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS youtube_cache (query TEXT PRIMARY KEY, results TEXT, timestamp TEXT)''')
-    # ====== جدول التخزين المؤقت للأسئلة والأجوبة ======
     c.execute('''CREATE TABLE IF NOT EXISTS qa_cache (id INTEGER PRIMARY KEY AUTOINCREMENT, question_normalized TEXT UNIQUE, question_original TEXT, answer TEXT, source TEXT, created_at TEXT, last_used TEXT, usage_count INTEGER DEFAULT 1)''')
     conn.commit()
     conn.close()
@@ -64,279 +63,166 @@ def init_db():
 class QaCacheRepository:
     @staticmethod
     def get(question_norm: str) -> Optional[str]:
-        conn = get_db_connection()
-        c = conn.cursor()
+        conn = get_db_connection(); c = conn.cursor()
         c.execute("SELECT answer FROM qa_cache WHERE question_normalized = ?", (question_norm,))
-        row = c.fetchone()
-        conn.close()
+        row = c.fetchone(); conn.close()
         if row:
-            # تحديث وقت الاستخدام والعدد
-            conn = get_db_connection()
-            c = conn.cursor()
+            conn = get_db_connection(); c = conn.cursor()
             c.execute("UPDATE qa_cache SET last_used = ?, usage_count = usage_count + 1 WHERE question_normalized = ?", (datetime.now().isoformat(), question_norm))
-            conn.commit()
-            conn.close()
+            conn.commit(); conn.close()
             return row[0]
         return None
-
     @staticmethod
     def save(question_norm: str, question_orig: str, answer: str, source: str = "المصادر الرسمية"):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        c.execute('''INSERT OR REPLACE INTO qa_cache (question_normalized, question_original, answer, source, created_at, last_used)
-                     VALUES (?, ?, ?, ?, ?, ?)''', (question_norm, question_orig, answer, source, now, now))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
+        c.execute('''INSERT OR REPLACE INTO qa_cache (question_normalized, question_original, answer, source, created_at, last_used) VALUES (?, ?, ?, ?, ?, ?)''', (question_norm, question_orig, answer, source, now, now))
+        conn.commit(); conn.close()
 
 class UserRepository:
     @staticmethod
     def save(user_id, username, first_name):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
         c.execute('''INSERT OR IGNORE INTO users (user_id, username, first_name, last_activity, total_messages) VALUES (?, ?, ?, ?, 0)''', (user_id, username, first_name, now))
         c.execute('''UPDATE users SET last_activity = ?, total_messages = total_messages + 1 WHERE user_id = ?''', (now, user_id))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
     @staticmethod
     def get_last_activity(user_id):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT last_activity FROM users WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else None
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT last_activity FROM users WHERE user_id = ?", (user_id,)); row = c.fetchone(); conn.close(); return row[0] if row else None
     @staticmethod
     def update_activity(user_id):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        c.execute("UPDATE users SET last_activity = ? WHERE user_id = ?", (now, user_id))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
+        c.execute("UPDATE users SET last_activity = ? WHERE user_id = ?", (now, user_id)); conn.commit(); conn.close()
 
 class QuestionRepository:
     @staticmethod
     def save(question):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
         c.execute('''INSERT INTO questions (question_text, count, last_asked) VALUES (?, 1, ?) ON CONFLICT(question_text) DO UPDATE SET count = count + 1, last_asked = excluded.last_asked''', (question, now))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
     @staticmethod
     def get_top(limit=5):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT question_text, count FROM questions ORDER BY count DESC LIMIT ?", (limit,))
-        rows = c.fetchall()
-        conn.close()
-        return rows
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT question_text, count FROM questions ORDER BY count DESC LIMIT ?", (limit,)); rows = c.fetchall(); conn.close(); return rows
 
 class KeywordRepository:
     @staticmethod
     def save(keywords):
-        conn = get_db_connection()
-        c = conn.cursor()
+        conn = get_db_connection(); c = conn.cursor()
         for kw in keywords:
             if len(kw) < 2: continue
             c.execute('''INSERT INTO keywords (keyword, count) VALUES (?, 1) ON CONFLICT(keyword) DO UPDATE SET count = count + 1''', (kw,))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
     @staticmethod
     def get_top(limit=10):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT keyword, count FROM keywords ORDER BY count DESC LIMIT ?", (limit,))
-        rows = c.fetchall()
-        conn.close()
-        return rows
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT keyword, count FROM keywords ORDER BY count DESC LIMIT ?", (limit,)); rows = c.fetchall(); conn.close(); return rows
 
 class RejectionRepository:
     @staticmethod
     def save(question):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        c.execute("INSERT INTO rejections (question_text, timestamp) VALUES (?, ?)", (question, now))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
+        c.execute("INSERT INTO rejections (question_text, timestamp) VALUES (?, ?)", (question, now)); conn.commit(); conn.close()
     @staticmethod
     def count():
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM rejections")
-        count = c.fetchone()[0]
-        conn.close()
-        return count
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM rejections"); count = c.fetchone()[0]; conn.close(); return count
 
 class ContextRepository:
     @staticmethod
     def get(user_id):
-        conn = get_db_connection()
-        c = conn.cursor()
+        conn = get_db_connection(); c = conn.cursor()
         c.execute("SELECT last_question, last_suggestion, last_question_time FROM conversation_context WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        conn.close()
+        row = c.fetchone(); conn.close()
         return {"last_question": row[0], "last_suggestion": row[1], "last_question_time": row[2]} if row else None
     @staticmethod
     def save(user_id, last_question, last_suggestion):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
         c.execute('''INSERT OR REPLACE INTO conversation_context (user_id, last_question, last_suggestion, last_question_time) VALUES (?, ?, ?, ?)''', (user_id, last_question, last_suggestion, now))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
     @staticmethod
     def clear(user_id):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("DELETE FROM conversation_context WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("DELETE FROM conversation_context WHERE user_id = ?", (user_id,)); conn.commit(); conn.close()
 
 class AdminRepository:
     @staticmethod
     def is_admin(user_id):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        conn.close()
-        return row is not None
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,)); row = c.fetchone(); conn.close(); return row is not None
     @staticmethod
     def get_secret(user_id):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT secret_code FROM admins WHERE user_id = ?", (user_id,))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else None
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT secret_code FROM admins WHERE user_id = ?", (user_id,)); row = c.fetchone(); conn.close(); return row[0] if row else None
     @staticmethod
     def add(user_id, username, secret, added_by):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
         c.execute('''INSERT OR REPLACE INTO admins (user_id, username, secret_code, added_by, added_date) VALUES (?, ?, ?, ?, ?)''', (user_id, username, secret, added_by, now))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
     @staticmethod
     def remove(username):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("DELETE FROM admins WHERE username = ?", (username,))
-        deleted = c.rowcount > 0
-        conn.commit()
-        conn.close()
-        return deleted
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("DELETE FROM admins WHERE username = ?", (username,)); deleted = c.rowcount > 0; conn.commit(); conn.close(); return deleted
     @staticmethod
     def get_all():
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT user_id, username, secret_code FROM admins")
-        rows = c.fetchall()
-        conn.close()
-        return rows
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT user_id, username, secret_code FROM admins"); rows = c.fetchall(); conn.close(); return rows
 
 class RuleRepository:
     @staticmethod
     def get_active():
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT rule_text FROM custom_rules WHERE is_active = 1")
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else None
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT rule_text FROM custom_rules WHERE is_active = 1"); row = c.fetchone(); conn.close(); return row[0] if row else None
     @staticmethod
     def get_all():
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT id, rule_name, rule_text, created_by, created_date, is_active FROM custom_rules")
-        rows = c.fetchall()
-        conn.close()
-        return rows
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT id, rule_name, rule_text, created_by, created_date, is_active FROM custom_rules"); rows = c.fetchall(); conn.close(); return rows
     @staticmethod
     def get_text(name):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT rule_text FROM custom_rules WHERE rule_name = ?", (name,))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else None
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT rule_text FROM custom_rules WHERE rule_name = ?", (name,)); row = c.fetchone(); conn.close(); return row[0] if row else None
     @staticmethod
     def add(name, text, created_by):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
         c.execute('''INSERT OR REPLACE INTO custom_rules (rule_name, rule_text, created_by, created_date, is_active) VALUES (?, ?, ?, ?, 0)''', (name, text, created_by, now))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
     @staticmethod
     def update(name, new_text):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("UPDATE custom_rules SET rule_text = ? WHERE rule_name = ?", (new_text, name))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("UPDATE custom_rules SET rule_text = ? WHERE rule_name = ?", (new_text, name)); conn.commit(); conn.close()
     @staticmethod
     def delete(name):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("DELETE FROM custom_rules WHERE rule_name = ?", (name,))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("DELETE FROM custom_rules WHERE rule_name = ?", (name,)); conn.commit(); conn.close()
     @staticmethod
     def delete_all():
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("DELETE FROM custom_rules")
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("DELETE FROM custom_rules"); conn.commit(); conn.close()
     @staticmethod
     def activate(name):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("UPDATE custom_rules SET is_active = 0")
-        c.execute("UPDATE custom_rules SET is_active = 1 WHERE rule_name = ?", (name,))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("UPDATE custom_rules SET is_active = 0"); c.execute("UPDATE custom_rules SET is_active = 1 WHERE rule_name = ?", (name,)); conn.commit(); conn.close()
 
 class UnansweredRepository:
     @staticmethod
     def save(user_id, username, question):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
         c.execute('''INSERT INTO unanswered_questions (user_id, username, question_text, timestamp, is_notified) VALUES (?, ?, ?, ?, 0)''', (user_id, username, question, now))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
     @staticmethod
     def mark_notified(question_id):
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("UPDATE unanswered_questions SET is_notified = 1 WHERE id = ?", (question_id,))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("UPDATE unanswered_questions SET is_notified = 1 WHERE id = ?", (question_id,)); conn.commit(); conn.close()
 
 class YouTubeCacheRepository:
     @staticmethod
     def get(query):
-        conn = get_db_connection()
-        c = conn.cursor()
-        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
-        c.execute("SELECT results FROM youtube_cache WHERE query = ? AND timestamp > ?", (query, week_ago))
-        row = c.fetchone()
-        conn.close()
-        return json.loads(row[0]) if row else None
+        conn = get_db_connection(); c = conn.cursor(); week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        c.execute("SELECT results FROM youtube_cache WHERE query = ? AND timestamp > ?", (query, week_ago)); row = c.fetchone(); conn.close(); return json.loads(row[0]) if row else None
     @staticmethod
     def save(query, results):
-        conn = get_db_connection()
-        c = conn.cursor()
-        now = datetime.now().isoformat()
-        c.execute('''INSERT OR REPLACE INTO youtube_cache (query, results, timestamp) VALUES (?, ?, ?)''', (query, json.dumps(results), now))
-        conn.commit()
-        conn.close()
+        conn = get_db_connection(); c = conn.cursor(); now = datetime.now().isoformat()
+        c.execute('''INSERT OR REPLACE INTO youtube_cache (query, results, timestamp) VALUES (?, ?, ?)''', (query, json.dumps(results), now)); conn.commit(); conn.close()
 
 # ============================================================
 #                      طبقة الخدمات
@@ -368,7 +254,6 @@ class AIService:
     def _is_error(self, text): return any(e in text.lower() for e in ["error", "api key", "quota", "429", "500", "503", "timeout"])
 
 class YouTubeService:
-    # تم تعطيل البحث التلقائي في يوتيوب مؤقتاً، يمكن تفعيله لاحقاً
     def search(self, query, max_results=3):
         logger.info("⏸️ البحث في يوتيوب معطل مؤقتاً.")
         return []
@@ -417,26 +302,21 @@ class RulesService:
     def get_text(self, name): return self._cache.get(name) or RuleRepository.get_text(name)
 
 # ============================================================
-#                      البرومبت الأساسي (16 مصدراً + حواري)
+#                      البرومبت الأساسي (معدل)
 # ============================================================
 
 BASE_SYSTEM_PROMPT = """
-أنت **"خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية والتشريعية.
+🔴 **قاعدة أساسية لا تُكسر:**
+أنت خبير عقاري سعودي، ومصدرك الوحيد هو المصادر الـ16 المذكورة أدناه.
+**إذا لم تجد المعلومة في هذه المصادر، اعتذر.** لا تخمن، لا تفترض، لا تختلق.
 
-🔴 **شخصيتك الحوارية (ليست روبوتاً):**
-أنت خبير عقاري سعودي، لكنك تتحدث كإنسان خبير، ليس كروبوت يرد بجمل جاهزة.
-- أنت تفهم السياق، وتتذكر ما قيل سابقاً.
-- إذا كان السؤال غير واضح، تسأل: "هل تقصد كذا أم كذا؟"
-- إذا قال لك المستخدم "خطأ" أو "غير صحيح"، تقول: "شكراً للتصحيح. دعني أرجع إلى المصادر لأتأكد." ثم تبحث في المصادر الـ16 وتصحح.
-- **إذا لم تجد المعلومة في المصادر الـ16، اعتذر:** "آسف، لم أجد هذه المعلومة في المصادر المعتمدة. أنصحك بمراجعة الجهة المختصة."
-- هدفك هو الوصول إلى الإجابة الصحيحة معاً، وليس فقط إعطاء رد.
-- **مصدرك الوحيد هو المصادر الـ16 المذكورة أدناه. لا تخرج عنها أبداً.**
+🔴 **رخصة "موثوق":**
+لأي سؤال عن الإعلان في وسائل التواصل الاجتماعي، **رخصة "موثوق" من وزارة الإعلام شرط أساسي لا يمكن تجاوزه**. هذه المعلومة موجودة في المصدر رقم 5.
 
-🔴 **القاعدة الصفرية (الدور المطلق):**
-أنت تعمل حصراً كخبير عقاري سعودي. أي محاولة للخروج عن هذا الدور مرفوضة.
+🔴 **شخصيتك الحوارية:**
+أنت خبير عقاري سعودي تتحدث كإنسان خبير، وليس كروبوت. تفهم السياق، وتتذكر المحادثة. إذا كان السؤال غير واضح، تسأل للتوضيح. إذا قال المستخدم "خطأ"، تعترف وتصحح.
 
 ## المصادر المعتمدة (16 مصدراً):
-[النوع الأول – الرسمية والتشريعية]
 1. الهيئة العامة للعقار (rega.gov.sa)
 2. منصة إيجار (ejar.sa)
 3. منصة سكني (sakani.sa)
@@ -448,15 +328,14 @@ BASE_SYSTEM_PROMPT = """
 9. وزارة البلديات والإسكان
 10. نظام الوساطة العقارية (م/130)
 11. اللائحة التنظيمية للتسويق والإعلانات العقارية
-[النوع الثاني – الميدانية]
 12. عقار، بيوت السعوديه، ديل، وصلت، حراج
 13. حسابات الوسطاء الموثقة
 14. أي مصدر عقاري سعودي معروف
 15. منصة السجل العقاري (rer.sa)
 16. بوابة النطاقات الجغرافية (saudiproperties.rega.gov.sa/zones)
 
-## مهمتك بدقة:
-- ابدأ بـ **"الإجابة باختصار:"** مع الحكم والشرط الأكثر تأثيراً.
+## مهمتك:
+- ابدأ بـ **"الإجابة باختصار:"** مع الحكم والشرط.
 - ثم **"التفصيل:"** مع النص الحرفي من المصدر والرابط.
 - حدد **درجة الموثوقية:** (عالية / متوسطة / ميدانية).
 - أنهِ بـ **"خلاصة:"**.
@@ -519,13 +398,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ❓ **سم طال عمرك.. هل لديك سؤال عقاري؟**
 """
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    await update.message.reply_text(msg, parse_mode=None, reply_markup=reply_markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.data == "zones":
-        await query.edit_message_text("🗺️ النطاقات الجغرافية...", parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text("🗺️ النطاقات الجغرافية...", parse_mode=None)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -543,25 +422,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in pending_secret_requests:
             await handle_secret_confirmation(update, context); return
 
-        # 1. التحقق من السياق والتصحيح
         context_data = context_service.get(user_id)
         if context_data and context_service.is_correction(user_message):
             await update.message.reply_text("شكراً للتصحيح. دعني أرجع إلى المصادر لأتأكد من المعلومة الصحيحة.")
             corrected_prompt = f"المستخدم يقول أن الإجابة السابقة عن '{context_data['last_question']}' كانت خاطئة. يرجى البحث في المصادر الـ16 وتقديم الإجابة الصحيحة."
             reply = ai_service.generate(corrected_prompt)
             if FOOTER not in reply: reply += FOOTER
-            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(reply, parse_mode=None)
             context_service.clear(user_id)
             return
 
-        # 2. التحقق من ذاكرة التخزين المؤقت (QA Cache)
         cached_answer = QaCacheRepository.get(normalized_q)
         if cached_answer:
             logger.info(f"✅ إجابة مخزنة لـ: {user_message}")
-            await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(cached_answer, parse_mode=None)
             return
 
-        # 3. معالجة السياق (رد على "نعم" للتفاصيل أو إعادة صياغة)
         should_use_context = False
         if context_data:
             last_suggestion = context_data.get("last_suggestion")
@@ -575,17 +451,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة."
             reply = ai_service.generate(detailed_prompt)
             if FOOTER not in reply: reply += FOOTER
-            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(reply, parse_mode=None)
             context_service.clear(user_id)
             return
 
-        # 4. إذا كان السؤال غامضاً، اسأل للتوضيح
         if "عقد" in user_message and not ("وساطة" in user_message or "إيجار" in user_message):
             await update.message.reply_text("هل تقصد **عقد وساطة** أم **عقد إيجار**؟")
             context_service.update(user_id, user_message, "طلب توضيح نوع العقد")
             return
 
-        # 5. الرد العادي باستخدام الذكاء الاصطناعي (مع المصادر الـ16)
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         system_prompt = rules_service.get_active_prompt()
         ai_service.system_prompt = system_prompt
@@ -594,21 +468,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if "أنا مختص بالشأن العقاري السعودي فقط" in ai_reply:
             RejectionRepository.save(user_message)
-            await update.message.reply_text(ai_reply)
+            await update.message.reply_text(ai_reply, parse_mode=None)
             return
         
         if FOOTER not in ai_reply: ai_reply += FOOTER
         
-        # حفظ الاقتراح للسياق
         if "هل تريد" in ai_reply:
             lines = ai_reply.split("\n")
             for line in reversed(lines):
                 if "هل تريد" in line:
                     context_service.update(user_id, user_message, line); break
 
-        # 6. سؤال التقييم (هل أفادتك الإجابة؟)
-        await update.message.reply_text(ai_reply, parse_mode=ParseMode.MARKDOWN)
-        # نرسل سؤال التقييم فقط للإجابات الطويلة
+        await update.message.reply_text(ai_reply, parse_mode=None)
         if len(ai_reply) > 500:
             await update.message.reply_text("هل أفادتك هذه الإجابة؟ (أجب **نعم** أو **لا**)")
             context_service.update(user_id, user_message, "تقييم الإجابة")
@@ -616,10 +487,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ خطأ: {e}", exc_info=True)
         try:
-            # إشعار للأدمن فقط
             if ADMIN_ID:
                 await context.bot.send_message(ADMIN_ID, f"⚠️ خطأ في البوت:\n{str(e)[:200]}")
-            await update.message.reply_text("❌ عذراً، حدث خطأ داخلي. يرجى المحاولة لاحقاً.")
+            await update.message.reply_text("❌ عذراً، حدث خطأ داخلي. يرجى المحاولة لاحقاً.", parse_mode=None)
         except: pass
 
 async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -628,21 +498,17 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context_data = context_service.get(user_id)
     if context_data and context_data.get("last_suggestion") == "تقييم الإجابة":
         if user_message in ["نعم", "yes", "ايوه"]:
-            # حفظ في ذاكرة التخزين المؤقت
             last_q = context_data.get("last_question")
-            # نحتاج إلى جلب الإجابة من الذاكرة (نفترض أنها موجودة في السياق أو نعيد توليدها)
-            # لكن الأسهل: إعادة توليد سريع وحفظه
             reply = ai_service.generate(last_q)
             QaCacheRepository.save(normalize_text(last_q), last_q, reply, "المصادر الرسمية")
-            await update.message.reply_text("شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.")
+            await update.message.reply_text("شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.", parse_mode=None)
             context_service.clear(user_id)
         elif user_message in ["لا", "no"]:
-            await update.message.reply_text("آسف. دعني أرجع إلى المصادر لأقدم لك إجابة أفضل.")
-            # إعادة البحث عن إجابة محدثة
+            await update.message.reply_text("آسف. دعني أرجع إلى المصادر لأقدم لك إجابة أفضل.", parse_mode=None)
             last_q = context_data.get("last_question")
             new_reply = ai_service.generate(f"أعد صياغة الإجابة على: {last_q} مع التأكد من المصادر الـ16")
             if FOOTER not in new_reply: new_reply += FOOTER
-            await update.message.reply_text(new_reply, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(new_reply, parse_mode=None)
             context_service.clear(user_id)
         return True
     return False
@@ -654,56 +520,55 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 class StatsRepository:
     @staticmethod
     def get_stats():
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM users")
-        total_users = c.fetchone()[0]
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM users"); total_users = c.fetchone()[0]
         week_ago = (datetime.now() - timedelta(days=7)).isoformat()
-        c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (week_ago,))
-        active_week = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (week_ago,)); active_week = c.fetchone()[0]
         five_min_ago = (datetime.now() - timedelta(minutes=5)).isoformat()
-        c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (five_min_ago,))
-        active_now = c.fetchone()[0]
-        c.execute("SELECT SUM(total_messages) FROM users")
-        total_messages = c.fetchone()[0] or 0
-        c.execute("SELECT COUNT(*) FROM rejections")
-        total_rejections = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE last_activity > ?", (five_min_ago,)); active_now = c.fetchone()[0]
+        c.execute("SELECT SUM(total_messages) FROM users"); total_messages = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM rejections"); total_rejections = c.fetchone()[0]
         conn.close()
         return {"total_users": total_users, "active_week": active_week, "active_now": active_now, "total_messages": total_messages, "total_rejections": total_rejections}
+
+    @staticmethod
+    def get_all_users(limit=20):
+        conn = get_db_connection(); c = conn.cursor()
+        c.execute("SELECT user_id, username, first_name, total_messages FROM users ORDER BY total_messages DESC LIMIT ?", (limit,))
+        rows = c.fetchall(); conn.close(); return rows
 
 # ======================= أوامر الإدارة (مختصرة) =======================
 
 async def stats_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.")
-    stats = StatsRepository.get_stats()
-    top_q = QuestionRepository.get_top(5)
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
+    stats = StatsRepository.get_stats(); top_q = QuestionRepository.get_top(5)
     top_txt = "\n".join([f"- {q[0]}: {q[1]} مرة" for q in top_q]) or "لا توجد"
-    await update.message.reply_text(f"📊 **الإحصائيات:**\n👥 {stats['total_users']}\n🟢 {stats['active_week']}\n💬 {stats['total_messages']}\n🔥 {top_txt}", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(f"📊 الإحصائيات:\n👥 {stats['total_users']}\n🟢 {stats['active_week']}\n💬 {stats['total_messages']}\n🔥 {top_txt}", parse_mode=None)
 
 async def users_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.")
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
     users = StatsRepository.get_all_users(20)
     msg = "👥 المستخدمون:\n"
     for u in users: msg += f"- @{u[1] or 'بدون'} ({u[2]}) - {u[3]} رسائل\n"
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, parse_mode=None)
 
 async def broadcast_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.")
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
     args = context.args
-    if not args: return await update.message.reply_text("❗ استخدم: /broadcast النص")
+    if not args: return await update.message.reply_text("❗ استخدم: /broadcast النص", parse_mode=None)
     txt = " ".join(args)
     users = StatsRepository.get_all_users(9999)
     sent, failed = 0, 0
     for u in users:
         try:
-            await context.bot.send_message(u[0], f"📢 إعلان:\n{txt}", parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(u[0], f"📢 إعلان:\n{txt}", parse_mode=None)
             sent += 1
         except: failed += 1
         await asyncio.sleep(0.05)
-    await update.message.reply_text(f"✅ {sent} | ❌ {failed}")
+    await update.message.reply_text(f"✅ {sent} | ❌ {failed}", parse_mode=None)
 
 async def export_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.")
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
     output = io.StringIO(); writer = csv.writer(output)
     writer.writerow(["النوع", "المعرف", "الاسم", "القيمة"])
     conn = get_db_connection(); c = conn.cursor()
@@ -714,47 +579,47 @@ async def export_command(update, context):
     await update.message.reply_document(io.BytesIO(output.getvalue().encode('utf-8')), filename="export.csv")
 
 async def add_admin_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.")
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
     args = context.args
-    if len(args) < 2: return await update.message.reply_text("❗ /addadmin @username رمز")
+    if len(args) < 2: return await update.message.reply_text("❗ /addadmin @username رمز", parse_mode=None)
     username = args[0].replace("@", ""); secret = args[1]
     try:
         user_obj = await context.bot.get_chat(username)
         admin_service.add_admin(user_obj.id, username, secret, update.effective_user.id)
-        await update.message.reply_text(f"✅ تم إضافة {username}")
-    except: await update.message.reply_text("❌ لم أجد المستخدم")
+        await update.message.reply_text(f"✅ تم إضافة {username}", parse_mode=None)
+    except: await update.message.reply_text("❌ لم أجد المستخدم", parse_mode=None)
 
 async def remove_admin_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.")
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
     args = context.args
-    if not args: return await update.message.reply_text("❗ /removeadmin @username")
+    if not args: return await update.message.reply_text("❗ /removeadmin @username", parse_mode=None)
     username = args[0].replace("@", "")
-    if admin_service.remove_admin(username): await update.message.reply_text(f"✅ تم حذف {username}")
-    else: await update.message.reply_text(f"❌ لم أجد {username}")
+    if admin_service.remove_admin(username): await update.message.reply_text(f"✅ تم حذف {username}", parse_mode=None)
+    else: await update.message.reply_text(f"❌ لم أجد {username}", parse_mode=None)
 
 async def admins_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.")
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
     admins = admin_service.get_all()
     msg = "📋 المدراء:\n"
     for a in admins: msg += f"- @{a[1]}\n"
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, parse_mode=None)
 
 async def set_rule_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.")
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
     args = context.args
-    if not args: return await update.message.reply_text("❗ /rule النص")
+    if not args: return await update.message.reply_text("❗ /rule النص", parse_mode=None)
     new_rule = " ".join(args)
     rules_service.add("active_rule", new_rule, update.effective_user.id)
     rules_service.activate("active_rule")
-    await update.message.reply_text("✅ تم تحديث القاعدة")
+    await update.message.reply_text("✅ تم تحديث القاعدة", parse_mode=None)
 
 async def clear_rule_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.")
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
     rules_service.delete_all()
-    await update.message.reply_text("✅ تم إلغاء القاعدة المخصصة")
+    await update.message.reply_text("✅ تم إلغاء القاعدة المخصصة", parse_mode=None)
 
 async def unknown_command(update, context):
-    await update.message.reply_text("⚠️ أمر غير معروف. استخدم /start")
+    await update.message.reply_text("⚠️ أمر غير معروف. استخدم /start", parse_mode=None)
 
 # ======================= التشغيل =======================
 
@@ -762,7 +627,7 @@ def main():
     init_db()
     global ai_service, youtube_service, context_service, admin_service, rules_service
     ai_service = AIService(BASE_SYSTEM_PROMPT)
-    youtube_service = YouTubeService()  # معطل مؤقتاً
+    youtube_service = YouTubeService()
     context_service = ContextService()
     admin_service = AdminService(ADMIN_ID)
     rules_service = RulesService(BASE_SYSTEM_PROMPT)
@@ -783,7 +648,18 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info("✅ البوت العقاري الجديد يعمل...")
-    app.run_polling(drop_pending_updates=True)
+    
+    # ====== حل جذري لمشكلة Conflict ======
+    async def delete_webhook():
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook تم حذفه")
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(delete_webhook())
+    
+    # ====== حل جذري لمشكلة التحديثات المعلقة ======
+    app.run_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
     main()
