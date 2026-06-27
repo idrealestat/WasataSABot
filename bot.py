@@ -403,8 +403,50 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "zones":
+    user_id = update.effective_user.id
+    data = query.data
+
+    if data == "zones":
         await query.edit_message_text("🗺️ النطاقات الجغرافية...", parse_mode=None)
+
+    # ====== أزرار اختيار نوع العقد ======
+    elif data == "contract_type_brokerage":
+        context_service.update(user_id, "عقد وساطة", "تم اختيار عقد وساطة")
+        await query.edit_message_text("✅ تم الاختيار: **عقد وساطة**. جاري البحث في المصادر...")
+        detailed_prompt = "المستخدم يسأل عن عقد وساطة عقارية. ابحث في المصادر الـ16 (باستثناء منصة إيجار)، مع التركيز على نظام الوساطة العقارية (م/130)، وقدم الإجابة كاملة."
+        reply = ai_service.generate(detailed_prompt)
+        if FOOTER not in reply: reply += FOOTER
+        await context.bot.send_message(chat_id=user_id, text=reply, parse_mode=None)
+
+    elif data == "contract_type_rent":
+        context_service.update(user_id, "عقد إيجار", "تم اختيار عقد إيجار")
+        await query.edit_message_text("✅ تم الاختيار: **عقد إيجار**. جاري البحث في المصادر...")
+        detailed_prompt = "المستخدم يسأل عن عقد إيجار. ابحث في المصادر الـ16 مع التركيز على منصة إيجار، والهيئة العامة للعقار، والمصادر الميدانية، وقدم الإجابة كاملة."
+        reply = ai_service.generate(detailed_prompt)
+        if FOOTER not in reply: reply += FOOTER
+        await context.bot.send_message(chat_id=user_id, text=reply, parse_mode=None)
+
+    # ====== أزرار التقييم (نعم / لا) ======
+    elif data == "feedback_yes":
+        context_data = context_service.get(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            if last_q:
+                reply = ai_service.generate(last_q)
+                QaCacheRepository.save(normalize_text(last_q), last_q, reply, "المصادر الرسمية")
+                await query.edit_message_text("✅ شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.")
+                context_service.clear(user_id)
+
+    elif data == "feedback_no":
+        context_data = context_service.get(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            if last_q:
+                await query.edit_message_text("🔄 آسف. دعني أرجع إلى المصادر لأقدم لك إجابة أفضل.")
+                new_reply = ai_service.generate(f"أعد صياغة الإجابة على: {last_q} مع التأكد من المصادر الـ16")
+                if FOOTER not in new_reply: new_reply += FOOTER
+                await context.bot.send_message(chat_id=user_id, text=new_reply, parse_mode=None)
+                context_service.clear(user_id)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -412,7 +454,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = user.id
         user_message = update.message.text.strip()
         normalized_q = normalize_text(user_message)
-        
+
         logger.info(f"📩 رسالة من @{user.username}: {user_message[:50]}...")
         UserRepository.save(user_id, user.username, user.first_name)
         UserRepository.update_activity(user_id)
@@ -438,6 +480,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(cached_answer, parse_mode=None)
             return
 
+        # ====== معالجة السياق (للتقييم أو التفاصيل) ======
         should_use_context = False
         if context_data:
             last_suggestion = context_data.get("last_suggestion")
@@ -447,6 +490,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if (datetime.now() - datetime.fromisoformat(last_time)).total_seconds() < 300:
                         should_use_context = True
                 except: pass
+
         if should_use_context and any(w in user_message for w in ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل"]):
             detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة."
             reply = ai_service.generate(detailed_prompt)
@@ -455,33 +499,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context_service.clear(user_id)
             return
 
+        # ====== إذا كان السؤال يحتوي على كلمة "عقد" وليس محدداً، نعرض أزراراً ======
         if "عقد" in user_message and not ("وساطة" in user_message or "إيجار" in user_message):
-            await update.message.reply_text("هل تقصد **عقد وساطة** أم **عقد إيجار**؟")
+            keyboard = [
+                [InlineKeyboardButton("📄 عقد وساطة", callback_data="contract_type_brokerage")],
+                [InlineKeyboardButton("📄 عقد إيجار", callback_data="contract_type_rent")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("هل تقصد **عقد وساطة** أم **عقد إيجار**؟", reply_markup=reply_markup)
             context_service.update(user_id, user_message, "طلب توضيح نوع العقد")
             return
 
+        # ====== الرد العادي (سؤال عام) ======
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         system_prompt = rules_service.get_active_prompt()
         ai_service.system_prompt = system_prompt
-        
+
         ai_reply = await asyncio.to_thread(ai_service.generate, user_message)
-        
+
         if "أنا مختص بالشأن العقاري السعودي فقط" in ai_reply:
             RejectionRepository.save(user_message)
             await update.message.reply_text(ai_reply, parse_mode=None)
             return
-        
+
         if FOOTER not in ai_reply: ai_reply += FOOTER
-        
+
         if "هل تريد" in ai_reply:
             lines = ai_reply.split("\n")
             for line in reversed(lines):
                 if "هل تريد" in line:
                     context_service.update(user_id, user_message, line); break
 
+        # ====== إرسال الرد + أزرار التقييم ======
         await update.message.reply_text(ai_reply, parse_mode=None)
         if len(ai_reply) > 500:
-            await update.message.reply_text("هل أفادتك هذه الإجابة؟ (أجب **نعم** أو **لا**)")
+            keyboard = [
+                [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
+                [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
             context_service.update(user_id, user_message, "تقييم الإجابة")
 
     except Exception as e:
@@ -493,25 +550,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
 
 async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_message = update.message.text.strip()
-    context_data = context_service.get(user_id)
-    if context_data and context_data.get("last_suggestion") == "تقييم الإجابة":
-        if user_message in ["نعم", "yes", "ايوه"]:
-            last_q = context_data.get("last_question")
-            reply = ai_service.generate(last_q)
-            QaCacheRepository.save(normalize_text(last_q), last_q, reply, "المصادر الرسمية")
-            await update.message.reply_text("شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.", parse_mode=None)
-            context_service.clear(user_id)
-        elif user_message in ["لا", "no"]:
-            await update.message.reply_text("آسف. دعني أرجع إلى المصادر لأقدم لك إجابة أفضل.", parse_mode=None)
-            last_q = context_data.get("last_question")
-            new_reply = ai_service.generate(f"أعد صياغة الإجابة على: {last_q} مع التأكد من المصادر الـ16")
-            if FOOTER not in new_reply: new_reply += FOOTER
-            await update.message.reply_text(new_reply, parse_mode=None)
-            context_service.clear(user_id)
-        return True
-    return False
+    # تم نقل هذه الوظيفة إلى button_callback
+    pass
 
 # ============================================================
 #                      الإحصائيات والوظائف الأخرى
@@ -646,19 +686,17 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
+
     logger.info("✅ البوت العقاري الجديد يعمل...")
-    
-    # ====== حل جذري لمشكلة Conflict ======
+
     async def delete_webhook():
         await app.bot.delete_webhook(drop_pending_updates=True)
         logger.info("✅ Webhook تم حذفه")
-    
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(delete_webhook())
-    
-    # ====== حل جذري لمشكلة التحديثات المعلقة ======
+
     app.run_polling(drop_pending_updates=True, allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
