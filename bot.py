@@ -310,20 +310,26 @@ BASE_SYSTEM_PROMPT = """
 أنت خبير عقاري سعودي، ومصدرك الوحيد هو المصادر الـ16 المذكورة أدناه.
 **إذا لم تجد المعلومة في هذه المصادر، اعتذر.** لا تخمن، لا تفترض، لا تختلق.
 
-🔴 **رخصة "موثوق":**
-لأي سؤال عن الإعلان في وسائل التواصل الاجتماعي، **رخصة "موثوق" من وزارة الإعلام شرط أساسي لا يمكن تجاوزه**. هذه المعلومة موجودة في المصدر رقم 5.
+🔴 **قاعدة "الإجابة باختصار" الشاملة:**
+يجب أن تحتوي جملة "الإجابة باختصار:" على:
+- الحكم الأساسي.
+- أهم شرط أو استثناء يغير الحكم (مثل: "لكنه مشروط برخصة موثوق").
 
-🔴 **قاعدة إلزامية لعرض المتطلبات والخطوات:**
-عند الإجابة عن أي سؤال يتعلق بإجراء (مثل: تسجيل، نقل ملكية، إفراغ، إلخ)، يجب عرض العناصر التالية في قسم "التفصيل" بشكل منفصل وواضح:
-- **المتطلبات:** (المستندات، الشروط، الأهلية، إلخ).
-- **الخطوات:** (الإجراءات بالترتيب).
-- **المساحات المشروطة:** (إن وجدت).
-- **الرسوم:** (إن وجدت).
-- **التنبيهات:** (تحذيرات، استثناءات).
-**إذا لم تتوفر معلومة لأي عنصر، اكتب: "لا تتوفر معلومات عن [اسم العنصر] في المصادر المعتمدة."**
+🔴 **قاعدة عرض العناصر السبعة (إلزامية عند طلب الإجراءات):**
+إذا كان السؤال يتضمن كلمات مثل: "كيف"، "طريقة"، "إجراءات"، "خطوات"، "متطلبات"، "شروط":
+**يجب** عرض العناصر التالية في قسم "التفصيل":
+1. الشروط
+2. الإجراءات
+3. الخطوات التي يجب اتخاذها
+4. المساحات المشروطة (إن وجدت)
+5. الضرائب والرسوم (إن وجدت)
+6. ما الذي يجب تنفيذه
+7. التنبيهات والتحذيرات
 
-🔴 **شخصيتك الحوارية:**
-أنت خبير عقاري سعودي تتحدث كإنسان خبير، وليس كروبوت. تفهم السياق، وتتذكر المحادثة. إذا كان السؤال غير واضح، تسأل للتوضيح. إذا قال المستخدم "خطأ"، تعترف وتصحح.
+🔴 **قاعدة التوجيه حسب الموضوع:**
+- إذا كان السؤال عن **عقد وساطة**: ابحث في المصادر الـ16 (باستثناء منصة إيجار)، وركز على نظام الوساطة العقارية.
+- إذا كان السؤال عن **عقد إيجار**: ابحث في منصة إيجار، والهيئة العامة للعقار، والمصادر الميدانية.
+- إذا كان السؤال عن **تملك غير السعوديين أو الخليجيين**: ابحث في بوابة النطاقات الجغرافية (المصدر رقم 16) والهيئة العامة للعقار.
 
 ## المصادر المعتمدة (16 مصدراً):
 1. الهيئة العامة للعقار (rega.gov.sa)
@@ -345,12 +351,10 @@ BASE_SYSTEM_PROMPT = """
 
 ## مهمتك:
 - ابدأ بـ **"الإجابة باختصار:"** مع الحكم والشرط.
-- ثم **"التفصيل:"** مع النص الحرفي من المصدر والرابط.
+- ثم **"التفصيل:"** مع النص الحرفي من المصدر والرابط، وعرض العناصر السبعة إن لزم الأمر.
 - حدد **درجة الموثوقية:** (عالية / متوسطة / ميدانية).
 - أنهِ بـ **"خلاصة:"**.
 - لا تخرج عن المصادر، وإذا لم تجد المعلومة اعتذر.
-
-عند بدء التشغيل: "تفضل: هل لديك اي سؤال عقاري ؟"
 """
 
 # ============================================================
@@ -377,6 +381,15 @@ def normalize_text(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'[^\w\s]', '', text)
+    return text
+
+def clean_markdown(text: str) -> str:
+    # إزالة الرموز غير المغلقة التي قد تسبب خطأ
+    # التأكد من أن كل ** لها زوج
+    parts = text.split('**')
+    if len(parts) % 2 == 0:
+        # عدد فردي من ** يعني أن هناك علامة غير مغلقة، نضيفها في النهاية
+        text = text + '**'
     return text
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,7 +420,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ❓ **سم طال عمرك.. هل لديك سؤال عقاري؟**
 """
-    await update.message.reply_text(msg, parse_mode=None, reply_markup=reply_markup)
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -416,44 +429,42 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "zones":
-        await query.edit_message_text("🗺️ النطاقات الجغرافية...", parse_mode=None)
+        await query.edit_message_text("🗺️ النطاقات الجغرافية...", parse_mode=ParseMode.MARKDOWN)
 
     # ====== أزرار اختيار نوع العقد ======
     elif data == "contract_type_brokerage":
         context_service.update(user_id, "عقد وساطة", "تم اختيار عقد وساطة")
         await query.edit_message_text("✅ تم الاختيار: **عقد وساطة**. جاري البحث في المصادر...")
-        detailed_prompt = "المستخدم يسأل عن عقد وساطة عقارية. ابحث في المصادر الـ16 (باستثناء منصة إيجار)، مع التركيز على نظام الوساطة العقارية (م/130)، وقدم الإجابة كاملة مع المتطلبات والخطوات."
+        detailed_prompt = "المستخدم يسأل عن عقد وساطة عقارية. ابحث في المصادر الـ16 (باستثناء منصة إيجار)، مع التركيز على نظام الوساطة العقارية (م/130)، وقدم الإجابة كاملة مع المتطلبات والخطوات إن وجدت."
         reply = ai_service.generate(detailed_prompt)
         if FOOTER not in reply: reply += FOOTER
-        await context.bot.send_message(chat_id=user_id, text=reply, parse_mode=None)
-        
-        # ====== إضافة سؤال التقييم ======
-        if len(reply) > 500:
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
-                [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await context.bot.send_message(chat_id=user_id, text="هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
-            context_service.update(user_id, "عقد وساطة", "تقييم الإجابة")
+        reply = clean_markdown(reply)
+        await context.bot.send_message(chat_id=user_id, text=reply, parse_mode=ParseMode.MARKDOWN)
+        # إظهار أزرار التقييم دائماً
+        keyboard = [
+            [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
+            [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await context.bot.send_message(chat_id=user_id, text="هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
+        context_service.update(user_id, detailed_prompt, "تقييم الإجابة")
 
     elif data == "contract_type_rent":
         context_service.update(user_id, "عقد إيجار", "تم اختيار عقد إيجار")
         await query.edit_message_text("✅ تم الاختيار: **عقد إيجار**. جاري البحث في المصادر...")
-        detailed_prompt = "المستخدم يسأل عن عقد إيجار. ابحث في المصادر الـ16 مع التركيز على منصة إيجار، والهيئة العامة للعقار، والمصادر الميدانية، وقدم الإجابة كاملة مع المتطلبات والخطوات."
+        detailed_prompt = "المستخدم يسأل عن عقد إيجار. ابحث في المصادر الـ16 مع التركيز على منصة إيجار، والهيئة العامة للعقار، والمصادر الميدانية، وقدم الإجابة كاملة مع المتطلبات والخطوات إن وجدت."
         reply = ai_service.generate(detailed_prompt)
         if FOOTER not in reply: reply += FOOTER
-        await context.bot.send_message(chat_id=user_id, text=reply, parse_mode=None)
-        
-        # ====== إضافة سؤال التقييم ======
-        if len(reply) > 500:
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
-                [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await context.bot.send_message(chat_id=user_id, text="هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
-            context_service.update(user_id, "عقد إيجار", "تقييم الإجابة")
+        reply = clean_markdown(reply)
+        await context.bot.send_message(chat_id=user_id, text=reply, parse_mode=ParseMode.MARKDOWN)
+        # إظهار أزرار التقييم دائماً
+        keyboard = [
+            [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
+            [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await context.bot.send_message(chat_id=user_id, text="هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
+        context_service.update(user_id, detailed_prompt, "تقييم الإجابة")
 
     # ====== أزرار التقييم (نعم / لا) ======
     elif data == "feedback_yes":
@@ -463,7 +474,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if last_q:
                 reply = ai_service.generate(last_q)
                 QaCacheRepository.save(normalize_text(last_q), last_q, reply, "المصادر الرسمية")
+                # رسالة تأكيد للحفظ
                 await query.edit_message_text("✅ شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.")
+                # إعادة السؤال الافتتاحي
+                await context.bot.send_message(chat_id=user_id, text="سم طال عمرك.. هل لديك سؤال عقاري آخر؟")
                 context_service.clear(user_id)
 
     elif data == "feedback_no":
@@ -472,10 +486,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_q = context_data.get("last_question")
             if last_q:
                 await query.edit_message_text("🔄 آسف. دعني أرجع إلى المصادر لأقدم لك إجابة أفضل.")
-                new_reply = ai_service.generate(f"أعد صياغة الإجابة على: {last_q} مع التأكد من المصادر الـ16")
+                new_reply = ai_service.generate(f"أعد صياغة الإجابة على: {last_q} مع التأكد من المصادر الـ16، وعرض المتطلبات والخطوات إن وجدت.")
                 if FOOTER not in new_reply: new_reply += FOOTER
-                await context.bot.send_message(chat_id=user_id, text=new_reply, parse_mode=None)
-                context_service.clear(user_id)
+                new_reply = clean_markdown(new_reply)
+                await context.bot.send_message(chat_id=user_id, text=new_reply, parse_mode=ParseMode.MARKDOWN)
+                # إعادة أزرار التقييم مرة أخرى (لتقييم الإجابة الجديدة)
+                keyboard = [
+                    [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
+                    [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await context.bot.send_message(chat_id=user_id, text="هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
+                context_service.update(user_id, last_q, "تقييم الإجابة")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -496,17 +518,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context_data = context_service.get(user_id)
         if context_data and context_service.is_correction(user_message):
             await update.message.reply_text("شكراً للتصحيح. دعني أرجع إلى المصادر لأتأكد من المعلومة الصحيحة.")
-            corrected_prompt = f"المستخدم يقول أن الإجابة السابقة عن '{context_data['last_question']}' كانت خاطئة. يرجى البحث في المصادر الـ16 وتقديم الإجابة الصحيحة."
+            corrected_prompt = f"المستخدم يقول أن الإجابة السابقة عن '{context_data['last_question']}' كانت خاطئة. يرجى البحث في المصادر الـ16 وتقديم الإجابة الصحيحة، مع عرض المتطلبات والخطوات إن وجدت."
             reply = ai_service.generate(corrected_prompt)
             if FOOTER not in reply: reply += FOOTER
-            await update.message.reply_text(reply, parse_mode=None)
+            reply = clean_markdown(reply)
+            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
             context_service.clear(user_id)
             return
 
         cached_answer = QaCacheRepository.get(normalized_q)
         if cached_answer:
             logger.info(f"✅ إجابة مخزنة لـ: {user_message}")
-            await update.message.reply_text(cached_answer, parse_mode=None)
+            await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN)
             return
 
         # ====== معالجة السياق (للتقييم أو التفاصيل) ======
@@ -521,10 +544,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except: pass
 
         if should_use_context and any(w in user_message for w in ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل"]):
-            detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة مع المتطلبات والخطوات."
+            detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد الآن التفاصيل الكاملة."
             reply = ai_service.generate(detailed_prompt)
             if FOOTER not in reply: reply += FOOTER
-            await update.message.reply_text(reply, parse_mode=None)
+            reply = clean_markdown(reply)
+            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
             context_service.clear(user_id)
             return
 
@@ -548,10 +572,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if "أنا مختص بالشأن العقاري السعودي فقط" in ai_reply:
             RejectionRepository.save(user_message)
-            await update.message.reply_text(ai_reply, parse_mode=None)
+            await update.message.reply_text(ai_reply, parse_mode=ParseMode.MARKDOWN)
             return
 
         if FOOTER not in ai_reply: ai_reply += FOOTER
+        ai_reply = clean_markdown(ai_reply)
 
         if "هل تريد" in ai_reply:
             lines = ai_reply.split("\n")
@@ -559,23 +584,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if "هل تريد" in line:
                     context_service.update(user_id, user_message, line); break
 
-        # ====== إرسال الرد + أزرار التقييم ======
-        await update.message.reply_text(ai_reply, parse_mode=None)
-        if len(ai_reply) > 500:
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
-                [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
-            context_service.update(user_id, user_message, "تقييم الإجابة")
+        # ====== إرسال الرد + أزرار التقييم دائماً ======
+        await update.message.reply_text(ai_reply, parse_mode=ParseMode.MARKDOWN)
+        keyboard = [
+            [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
+            [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
+        context_service.update(user_id, user_message, "تقييم الإجابة")
 
     except Exception as e:
         logger.error(f"❌ خطأ: {e}", exc_info=True)
         try:
             if ADMIN_ID:
                 await context.bot.send_message(ADMIN_ID, f"⚠️ خطأ في البوت:\n{str(e)[:200]}")
-            await update.message.reply_text("❌ عذراً، حدث خطأ داخلي. يرجى المحاولة لاحقاً.", parse_mode=None)
+            await update.message.reply_text("❌ عذراً، حدث خطأ داخلي. يرجى المحاولة لاحقاً.", parse_mode=ParseMode.MARKDOWN)
         except: pass
 
 async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -609,35 +633,35 @@ class StatsRepository:
 # ======================= أوامر الإدارة (مختصرة) =======================
 
 async def stats_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=ParseMode.MARKDOWN)
     stats = StatsRepository.get_stats(); top_q = QuestionRepository.get_top(5)
     top_txt = "\n".join([f"- {q[0]}: {q[1]} مرة" for q in top_q]) or "لا توجد"
-    await update.message.reply_text(f"📊 الإحصائيات:\n👥 {stats['total_users']}\n🟢 {stats['active_week']}\n💬 {stats['total_messages']}\n🔥 {top_txt}", parse_mode=None)
+    await update.message.reply_text(f"📊 الإحصائيات:\n👥 {stats['total_users']}\n🟢 {stats['active_week']}\n💬 {stats['total_messages']}\n🔥 {top_txt}", parse_mode=ParseMode.MARKDOWN)
 
 async def users_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=ParseMode.MARKDOWN)
     users = StatsRepository.get_all_users(20)
     msg = "👥 المستخدمون:\n"
     for u in users: msg += f"- @{u[1] or 'بدون'} ({u[2]}) - {u[3]} رسائل\n"
-    await update.message.reply_text(msg, parse_mode=None)
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def broadcast_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=ParseMode.MARKDOWN)
     args = context.args
-    if not args: return await update.message.reply_text("❗ استخدم: /broadcast النص", parse_mode=None)
+    if not args: return await update.message.reply_text("❗ استخدم: /broadcast النص", parse_mode=ParseMode.MARKDOWN)
     txt = " ".join(args)
     users = StatsRepository.get_all_users(9999)
     sent, failed = 0, 0
     for u in users:
         try:
-            await context.bot.send_message(u[0], f"📢 إعلان:\n{txt}", parse_mode=None)
+            await context.bot.send_message(u[0], f"📢 إعلان:\n{txt}", parse_mode=ParseMode.MARKDOWN)
             sent += 1
         except: failed += 1
         await asyncio.sleep(0.05)
-    await update.message.reply_text(f"✅ {sent} | ❌ {failed}", parse_mode=None)
+    await update.message.reply_text(f"✅ {sent} | ❌ {failed}", parse_mode=ParseMode.MARKDOWN)
 
 async def export_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=ParseMode.MARKDOWN)
     output = io.StringIO(); writer = csv.writer(output)
     writer.writerow(["النوع", "المعرف", "الاسم", "القيمة"])
     conn = get_db_connection(); c = conn.cursor()
@@ -648,47 +672,47 @@ async def export_command(update, context):
     await update.message.reply_document(io.BytesIO(output.getvalue().encode('utf-8')), filename="export.csv")
 
 async def add_admin_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=ParseMode.MARKDOWN)
     args = context.args
-    if len(args) < 2: return await update.message.reply_text("❗ /addadmin @username رمز", parse_mode=None)
+    if len(args) < 2: return await update.message.reply_text("❗ /addadmin @username رمز", parse_mode=ParseMode.MARKDOWN)
     username = args[0].replace("@", ""); secret = args[1]
     try:
         user_obj = await context.bot.get_chat(username)
         admin_service.add_admin(user_obj.id, username, secret, update.effective_user.id)
-        await update.message.reply_text(f"✅ تم إضافة {username}", parse_mode=None)
-    except: await update.message.reply_text("❌ لم أجد المستخدم", parse_mode=None)
+        await update.message.reply_text(f"✅ تم إضافة {username}", parse_mode=ParseMode.MARKDOWN)
+    except: await update.message.reply_text("❌ لم أجد المستخدم", parse_mode=ParseMode.MARKDOWN)
 
 async def remove_admin_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=ParseMode.MARKDOWN)
     args = context.args
-    if not args: return await update.message.reply_text("❗ /removeadmin @username", parse_mode=None)
+    if not args: return await update.message.reply_text("❗ /removeadmin @username", parse_mode=ParseMode.MARKDOWN)
     username = args[0].replace("@", "")
-    if admin_service.remove_admin(username): await update.message.reply_text(f"✅ تم حذف {username}", parse_mode=None)
-    else: await update.message.reply_text(f"❌ لم أجد {username}", parse_mode=None)
+    if admin_service.remove_admin(username): await update.message.reply_text(f"✅ تم حذف {username}", parse_mode=ParseMode.MARKDOWN)
+    else: await update.message.reply_text(f"❌ لم أجد {username}", parse_mode=ParseMode.MARKDOWN)
 
 async def admins_command(update, context):
-    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=None)
+    if not admin_service.is_admin(update.effective_user.id): return await update.message.reply_text("⛔ للمدراء فقط.", parse_mode=ParseMode.MARKDOWN)
     admins = admin_service.get_all()
     msg = "📋 المدراء:\n"
     for a in admins: msg += f"- @{a[1]}\n"
-    await update.message.reply_text(msg, parse_mode=None)
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def set_rule_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=ParseMode.MARKDOWN)
     args = context.args
-    if not args: return await update.message.reply_text("❗ /rule النص", parse_mode=None)
+    if not args: return await update.message.reply_text("❗ /rule النص", parse_mode=ParseMode.MARKDOWN)
     new_rule = " ".join(args)
     rules_service.add("active_rule", new_rule, update.effective_user.id)
     rules_service.activate("active_rule")
-    await update.message.reply_text("✅ تم تحديث القاعدة", parse_mode=None)
+    await update.message.reply_text("✅ تم تحديث القاعدة", parse_mode=ParseMode.MARKDOWN)
 
 async def clear_rule_command(update, context):
-    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=None)
+    if not admin_service.is_owner(update.effective_user.id): return await update.message.reply_text("⛔ للمالك فقط.", parse_mode=ParseMode.MARKDOWN)
     rules_service.delete_all()
-    await update.message.reply_text("✅ تم إلغاء القاعدة المخصصة", parse_mode=None)
+    await update.message.reply_text("✅ تم إلغاء القاعدة المخصصة", parse_mode=ParseMode.MARKDOWN)
 
 async def unknown_command(update, context):
-    await update.message.reply_text("⚠️ أمر غير معروف. استخدم /start", parse_mode=None)
+    await update.message.reply_text("⚠️ أمر غير معروف. استخدم /start", parse_mode=ParseMode.MARKDOWN)
 
 # ======================= التشغيل =======================
 
