@@ -562,7 +562,7 @@ def classify_question(user_message: str, context: str = None) -> str:
             system_content += f"\nالسياق: {context}"
         
         response = client_groq.chat.completions.create(
-            model="llama-3.2-3b-instruct",  # نموذج سريع جداً ومجاني
+            model="llama-3.1-8b-instant",  # ← تم التعديل هنا
             messages=[
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_message}
