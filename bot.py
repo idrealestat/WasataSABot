@@ -465,9 +465,6 @@ BASE_SYSTEM_PROMPT = """
 - الحكم الأساسي (نعم/لا/مسموح/ممنوع).
 - أهم شرط أو استثناء يغير الحكم (مثل: "لكنه مشروط برخصة موثوق").
 
-🔴 **قاعدة النسخ الحرفي من المصدر:**
-في قسم "التفصيل:"، يجب نسخ النص الرسمي من المصدر بين علامتي تنصيص كما هو دون اختصار أو تعديل.
-
 🔴 **التسجيل العيني والمناطق الجغرافية:**
 - إذا كان السؤال عن التسجيل العيني، ابحث في منصة السجل العقاري (https://rer.sa) والمصادر الميدانية.
 - إذا كان السائل أجنبياً أو خليجياً، أضف معلومات عن النطاقات الجغرافية (https://saudiproperties.rega.gov.sa/zones).
@@ -532,23 +529,29 @@ def is_api_error(response_text: str) -> bool:
     return any(indicator in response_text for indicator in error_indicators)
 
 # ======================= نظام التصنيف (باستخدام نموذج خفيف مجاني) =======================
-def classify_question(user_message: str) -> str:
+def classify_question(user_message: str, context: str = None) -> str:
     """
     تصنيف السؤال باستخدام نموذج خفيف وسريع (مجاني).
-    الفئات: 'عقد وساطة', 'عقد إيجار', 'تسجيل عيني', 'إعلان', 'سؤال عام'
+    الفئات: 'عقد وساطة', 'عقد إيجار', 'تسجيل عيني', 'إعلان', 'طلب توضيح', 'سؤال عام'
     """
     try:
-        response = client_groq.chat.completions.create(
-            model="llama-3.2-3b-instruct",  # نموذج سريع جداً ومجاني
-            messages=[
-                {"role": "system", "content": """صنف هذا السؤال العقاري إلى واحدة من هذه الفئات فقط:
+        system_content = """صنف هذا السؤال العقاري إلى واحدة من هذه الفئات فقط:
 - 'عقد وساطة': إذا كان عن عقود الوساطة (مثل: عقد وساطة، وساطة عقارية، عمولة وساطة)
 - 'عقد إيجار': إذا كان عن عقود الإيجار (مثل: عقد إيجار، تأجير، مستأجر، منصة إيجار)
 - 'تسجيل عيني': إذا كان عن التسجيل العيني أو السجل العقاري (مثل: تسجيل عيني، سجل عقاري، صك)
 - 'إعلان': إذا كان عن الإعلان في وسائل التواصل الاجتماعي، أو النشر، أو رخصة موثوق، أو لوحات إعلانية
+- 'طلب توضيح': إذا كان السؤال يطلب شرحاً أو توضيحاً لرد سابق (مثل: كيف يعني ذلك؟، وضح اكثر، ماذا تقصد؟، اشرح لي، كيف ذلك؟، فهمني)
 - 'سؤال عام': لأي سؤال عقاري آخر
 
-أجب فقط باسم الفئة."""},
+أجب فقط باسم الفئة."""
+        
+        if context:
+            system_content += f"\nالسياق: {context}"
+        
+        response = client_groq.chat.completions.create(
+            model="llama-3.2-3b-instruct",  # نموذج سريع جداً ومجاني
+            messages=[
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": user_message}
             ],
             temperature=0.1,
@@ -982,7 +985,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("شكراً لمشاركتك. سم طال عمرك.. هل عندك سؤال عقاري آخر؟")
             clear_context(user_id)
 
-    # ====== أزرار الحوار (هل هناك طريقة أخرى؟) ======
+    # ====== أزرار الحوار ======
     elif data == "dialog_yes":
         context_data = get_context(user_id)
         last_q = context_data.get("last_question") if context_data else None
@@ -1069,22 +1072,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # ====== معالجة الحوار (الأسئلة الاستفسارية) ======
-    if any(phrase in user_message for phrase in ["هل هناك طريقة أخرى", "ماذا عن", "بديل", "طريقة ثانية", "خيار آخر"]):
+    # ====== التصنيف الأولي لتحديد نوع السؤال ======
+    classification = classify_question(user_message)
+    logger.info(f"📊 التصنيف: {classification}")
+
+    # ====== إذا كان طلب توضيح ======
+    if classification == "طلب توضيح":
         context_data = get_context(user_id)
         if context_data:
             last_q = context_data.get("last_question")
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم، أقصد كذا", callback_data="dialog_yes")],
-                [InlineKeyboardButton("❌ لا، وضح لي أكثر", callback_data="dialog_no")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                f"هل تقصد أن هناك طريقة أخرى للتعامل مع: '{last_q}'؟",
-                reply_markup=reply_markup
-            )
-            save_context(user_id, user_message, "حوار - طلب طريقة أخرى")
-            return
+            if last_q:
+                keyboard = [
+                    [InlineKeyboardButton("✅ نعم، أوضح لي أكثر", callback_data="dialog_yes")],
+                    [InlineKeyboardButton("❌ لا، وضح لي بطريقة أخرى", callback_data="dialog_no")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    f"هل تريد توضيحاً أكثر بخصوص: '{last_q}'؟",
+                    reply_markup=reply_markup
+                )
+                save_context(user_id, user_message, "حوار - طلب توضيح")
+                return
 
     # ====== أزرار اختيار نوع العقد (إن وجد) ======
     if "عقد" in user_message and not any(k in user_message for k in ["وساطة", "وساطه", "إيجار", "ايجار"]):
@@ -1121,12 +1129,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-    # ====== التصنيف والتوليد ======
+    # ====== التوليد (للباقي من الأسئلة) ======
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        
-        classification = classify_question(user_message)
-        logger.info(f"📊 التصنيف: {classification}")
         
         reply = get_ai_response_with_classification(user_message, classification)
 
