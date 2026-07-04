@@ -564,7 +564,7 @@ def classify_question(user_message: str, context: str = None) -> str:
             system_content += f"\nالسياق: {context}"
         
         response = client_groq.chat.completions.create(
-            model="mixtral-8x7b-32768",  # نموذج متوفر ومجاني
+            model="mixtral-8x7b-32768",
             messages=[
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_message}
@@ -1438,7 +1438,17 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("✅ البوت العقاري يعمل بنظام التصنيف الذكي مع منهجية البحث الشاملة...")
-    app.run_polling()
+
+    # ======================= حل مشكلة Conflict =======================
+    async def delete_webhook():
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook تم حذفه")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(delete_webhook())
+
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
