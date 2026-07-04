@@ -68,7 +68,8 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         last_question TEXT,
         last_suggestion TEXT,
-        last_question_time TEXT
+        last_question_time TEXT,
+        clarification_stage TEXT DEFAULT 'menu'
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS admins (
         user_id INTEGER PRIMARY KEY,
@@ -162,30 +163,42 @@ def save_rejection(question_text):
     conn.commit()
     conn.close()
 
-def save_context(user_id, last_question, last_suggestion):
+def save_context(user_id, last_question, last_suggestion, clarification_stage="menu"):
     conn = get_db_connection()
     c = conn.cursor()
     now = datetime.now().isoformat()
-    c.execute('''INSERT OR REPLACE INTO conversation_context (user_id, last_question, last_suggestion, last_question_time)
-                 VALUES (?, ?, ?, ?)''', (user_id, last_question, last_suggestion, now))
+    c.execute('''INSERT OR REPLACE INTO conversation_context (user_id, last_question, last_suggestion, last_question_time, clarification_stage)
+                 VALUES (?, ?, ?, ?, ?)''', (user_id, last_question, last_suggestion, now, clarification_stage))
     conn.commit()
     conn.close()
 
 def get_context(user_id):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''SELECT last_question, last_suggestion, last_question_time FROM conversation_context
+    c.execute('''SELECT last_question, last_suggestion, last_question_time, clarification_stage FROM conversation_context
                  WHERE user_id = ?''', (user_id,))
     row = c.fetchone()
     conn.close()
     if row:
-        return {"last_question": row[0], "last_suggestion": row[1], "last_question_time": row[2]}
+        return {
+            "last_question": row[0],
+            "last_suggestion": row[1],
+            "last_question_time": row[2],
+            "clarification_stage": row[3] if row[3] else "menu"
+        }
     return None
 
 def clear_context(user_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute('''DELETE FROM conversation_context WHERE user_id = ?''', (user_id,))
+    conn.commit()
+    conn.close()
+
+def update_clarification_stage(user_id, stage):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''UPDATE conversation_context SET clarification_stage = ? WHERE user_id = ?''', (stage, user_id))
     conn.commit()
     conn.close()
 
@@ -985,21 +998,78 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("شكراً لمشاركتك. سم طال عمرك.. هل عندك سؤال عقاري آخر؟")
             clear_context(user_id)
 
-    # ====== أزرار الحوار ======
-    elif data == "dialog_yes":
+    # ====== أزرار التوضيح (الشروط، المتطلبات، الخطوات، كل ما سبق، شيء اخر) ======
+    elif data == "clarify_conditions":
         context_data = get_context(user_id)
-        last_q = context_data.get("last_question") if context_data else None
-        if last_q:
-            detailed_prompt = f"المستخدم يسأل عن بديل أو طريقة أخرى لـ: {last_q}. ابحث في المصادر الـ16 وقدم التفاصيل الكاملة."
+        if context_data:
+            last_q = context_data.get("last_question")
+            detailed_prompt = f"المستخدم يطلب توضيح الشروط المتعلقة بـ: {last_q}. ابحث في المصادر الـ16 وقدم فقط الشروط المطلوبة بشكل مفصل."
             reply = get_ai_response_with_classification(detailed_prompt)
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
             clear_context(user_id)
 
-    elif data == "dialog_no":
-        await query.edit_message_text("وضح لي أكثر طال عمرك، وحدد ما تحتاجه بالضبط لأعطيك الرد المناسب من المصادر الرسمية.")
-        clear_context(user_id)
+    elif data == "clarify_requirements":
+        context_data = get_context(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            detailed_prompt = f"المستخدم يطلب توضيح المتطلبات المتعلقة بـ: {last_q}. ابحث في المصادر الـ16 وقدم فقط المتطلبات المطلوبة بشكل مفصل."
+            reply = get_ai_response_with_classification(detailed_prompt)
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
+            clear_context(user_id)
+
+    elif data == "clarify_steps":
+        context_data = get_context(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            detailed_prompt = f"المستخدم يطلب توضيح الخطوات المتعلقة بـ: {last_q}. ابحث في المصادر الـ16 وقدم فقط الخطوات المطلوبة بشكل مفصل."
+            reply = get_ai_response_with_classification(detailed_prompt)
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
+            clear_context(user_id)
+
+    elif data == "clarify_all":
+        context_data = get_context(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            detailed_prompt = f"المستخدم يطلب التوضيح الكامل لـ: {last_q}. ابحث في المصادر الـ16 وقدم الإجابة كاملة مع الشروط والمتطلبات والخطوات."
+            reply = get_ai_response_with_classification(detailed_prompt)
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
+            clear_context(user_id)
+
+    elif data == "clarify_other":
+        context_data = get_context(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            await query.edit_message_text(f"وضح لي أكثر طال عمرك، ماذا تريد توضيحه بالضبط بخصوص: '{last_q}'؟")
+            update_clarification_stage(user_id, "awaiting_clarification")
+            # حفظ حالة انتظار التوضيح
+
+    # ====== تأكيد الفهم (نعم / لا) ======
+    elif data == "confirm_yes":
+        context_data = get_context(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            # إرسال التفاصيل الكاملة
+            detailed_prompt = f"المستخدم أكد فهمه. قدم التفاصيل الكاملة لـ: {last_q} مع الشروط والمتطلبات والخطوات."
+            reply = get_ai_response_with_classification(detailed_prompt)
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
+            clear_context(user_id)
+
+    elif data == "confirm_no":
+        context_data = get_context(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            await query.edit_message_text(f"وضح لي أكثر طال عمرك، وحدد ما تحتاجه بالضبط لأعطيك الرد المناسب من المصادر الرسمية بخصوص: '{last_q}'.")
+            update_clarification_stage(user_id, "awaiting_clarification")
 
 # ======================= دوال البوت =======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1083,16 +1153,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_q = context_data.get("last_question")
             if last_q:
                 keyboard = [
-                    [InlineKeyboardButton("✅ نعم، أوضح لي أكثر", callback_data="dialog_yes")],
-                    [InlineKeyboardButton("❌ لا، وضح لي بطريقة أخرى", callback_data="dialog_no")]
+                    [InlineKeyboardButton("📋 الشروط", callback_data="clarify_conditions")],
+                    [InlineKeyboardButton("📄 المتطلبات", callback_data="clarify_requirements")],
+                    [InlineKeyboardButton("📝 الخطوات", callback_data="clarify_steps")],
+                    [InlineKeyboardButton("📚 كل ما سبق", callback_data="clarify_all")],
+                    [InlineKeyboardButton("❓ شيء اخر غير ما سبق", callback_data="clarify_other")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await update.message.reply_text(
-                    f"هل تريد توضيحاً أكثر بخصوص: '{last_q}'؟",
+                    f"ماذا تريد توضيحه بالضبط بخصوص: '{last_q}'؟",
                     reply_markup=reply_markup
                 )
-                save_context(user_id, user_message, "حوار - طلب توضيح")
+                save_context(user_id, user_message, "حوار - طلب توضيح", "menu")
                 return
+
+    # ====== إذا كان البوت في مرحلة انتظار توضيح (بعد اختيار "شيء اخر") ======
+    context_data = get_context(user_id)
+    if context_data and context_data.get("clarification_stage") == "awaiting_clarification":
+        last_q = context_data.get("last_question")
+        # عرض تأكيد الفهم
+        keyboard = [
+            [InlineKeyboardButton("✅ نعم، هذا ما أقصد", callback_data="confirm_yes")],
+            [InlineKeyboardButton("❌ لا، وضح لي أكثر", callback_data="confirm_no")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"هل تقصد أنك تريد توضيحاً بخصوص: '{last_q}' بناءً على ما كتبته؟",
+            reply_markup=reply_markup
+        )
+        update_clarification_stage(user_id, "awaiting_confirmation")
+        return
 
     # ====== أزرار اختيار نوع العقد (إن وجد) ======
     if "عقد" in user_message and not any(k in user_message for k in ["وساطة", "وساطه", "إيجار", "ايجار"]):
