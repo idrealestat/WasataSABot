@@ -543,7 +543,7 @@ def is_api_error(response_text: str) -> bool:
     ]
     return any(indicator in response_text for indicator in error_indicators)
 
-# ======================= نظام التصنيف (باستخدام نموذج خفيف مجاني) =======================
+# ======================= نظام التصنيف (باستخدام نموذج خفيف مجاني متوفر) =======================
 def classify_question(user_message: str, context: str = None) -> str:
     """
     تصنيف السؤال باستخدام نموذج خفيف وسريع (مجاني).
@@ -564,7 +564,7 @@ def classify_question(user_message: str, context: str = None) -> str:
             system_content += f"\nالسياق: {context}"
         
         response = client_groq.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="mixtral-8x7b-32768",  # نموذج متوفر ومجاني
             messages=[
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_message}
@@ -582,6 +582,7 @@ def classify_question(user_message: str, context: str = None) -> str:
 def get_ai_response_with_classification(user_message: str, classification: str = None) -> str:
     """
     توليد الرد بناءً على التصنيف (إن وجد)، وإلا يستخدم البرومبت الأساسي.
+    مع نظام التبديل الثلاثي (Groq → OpenRouter → Gemini).
     """
     # ====== التحقق من أن السؤال عقاري ======
     non_real_estate_keywords = [
@@ -611,9 +612,9 @@ def get_ai_response_with_classification(user_message: str, classification: str =
     else:
         system_prompt = base_prompt
 
-    # محاولة التوليد عبر Groq (النموذج القوي)
+    # ========== محاولة 1: Groq ==========
     try:
-        logger.info("⚡ باستخدام Groq (توليد)...")
+        logger.info("⚡ باستخدام Groq (سرعة فائقة)...")
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -625,13 +626,40 @@ def get_ai_response_with_classification(user_message: str, classification: str =
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
+            logger.info("✅ Groq: رد صحيح")
             return reply
+        else:
+            logger.warning(f"⚠️ Groq: رد يحتوي على خطأ: {reply[:200]}...")
     except Exception as e:
         logger.warning(f"⚠️ فشل Groq: {e}")
 
-    # الاحتياطي: Gemini
+    # ========== محاولة 2: OpenRouter ==========
+    if client_openrouter:
+        try:
+            logger.info("🔄 باستخدام OpenRouter (احتياطي)...")
+            response = client_openrouter.chat.completions.create(
+                model="google/gemini-2.5-flash",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.2,
+                max_tokens=3500
+            )
+            reply = response.choices[0].message.content
+            if not is_api_error(reply):
+                logger.info("✅ OpenRouter: رد صحيح")
+                return reply
+            else:
+                logger.warning(f"⚠️ OpenRouter: رد يحتوي على خطأ: {reply[:200]}...")
+        except Exception as e:
+            logger.warning(f"⚠️ فشل OpenRouter: {e}")
+    else:
+        logger.info("⏭️ OpenRouter غير متاح (OPENROUTER_API_KEY غير مضبوط)")
+
+    # ========== محاولة 3: Gemini ==========
     try:
-        logger.info("🔄 باستخدام Google Gemini (احتياطي)...")
+        logger.info("🔄 باستخدام Google Gemini (الملاذ الأخير)...")
         response = client_gemini.chat.completions.create(
             model="gemini-2.5-flash",
             messages=[
@@ -643,10 +671,14 @@ def get_ai_response_with_classification(user_message: str, classification: str =
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
+            logger.info("✅ Gemini: رد صحيح")
             return reply
+        else:
+            logger.warning(f"⚠️ Gemini: رد يحتوي على خطأ: {reply[:200]}...")
     except Exception as e:
         logger.warning(f"⚠️ فشل Gemini: {e}")
 
+    # ========== جميع المحاولات فشلت ==========
     return "❌ عذراً، جميع خدمات الذكاء الاصطناعي غير متاحة حالياً. يرجى المحاولة لاحقاً."
 
 # ======================= دوال التأكيد بالرقم السري =======================
