@@ -396,6 +396,7 @@ BASE_SYSTEM_PROMPT = """
 - إذا كان السؤال غير واضح، تسأل: "هل تقصد كذا أم كذا؟" وتنتظر التوضيح.
 - إذا قال لك المستخدم "خطأ" أو "غير صحيح"، تقول: "شكراً للتصحيح. دعني أرجع إلى المصادر لأتأكد." ثم تبحث وتصحح.
 - تناقش، ولا تكتفي بإعطاء إجابة جاهزة. هدفك هو الوصول إلى الإجابة الصحيحة معاً.
+- إذا قال المستخدم "هل هناك طريقة أخرى؟" أو "ماذا عن كذا؟"، تفاعل معه كشريك حوار وليس كروبوت أجوبة.
 - **مصدرك الوحيد هو المصادر الـ16.** لا تخرج عنها، وإذا لم تجد المعلومة، اعتذر بصدق.
 
 🔴 **منهجية البحث الشاملة (ابحث في كل المصادر):**
@@ -418,12 +419,19 @@ BASE_SYSTEM_PROMPT = """
 **إذا وجدت شرطاً أساسياً في أي مصدر، اذكره في "الإجابة باختصار" وفي "التفصيل".**
 
 🔴 **العناصر الإلزامية في كل رد (3 نقاط):**
-في كل إجابة، يجب أن يذكر البوت هذه النقاط الثلاث بوضوح:
-1. **الشروط:** ما هي الشروط المطلوبة لتحقيق المطلوب؟
-2. **المتطلبات:** ما هي المستندات أو التراخيص أو الإجراءات المطلوبة؟
-3. **الخطوات:** ما هي الخطوات العملية التي يجب اتخاذها؟
+في كل إجابة، يجب أن يذكر البوت هذه النقاط الثلاث بوضوح وبشكل مفصل (وليس مجرد عناوين):
+1. **الشروط:** اذكر جميع الشروط المطلوبة بشكل مفصل.
+2. **المتطلبات:** اذكر جميع المستندات والتراخيص والإجراءات المطلوبة بشكل مفصل.
+3. **الخطوات:** اذكر الخطوات العملية التي يجب اتخاذها بشكل مفصل ومنظم.
 
 **يجب أن تكون هذه النقاط الثلاث موجودة في كل رد، سواء في "الإجابة باختصار" أو في "التفصيل".**
+
+🔴 **قاعدة الفواصل بين العناصر:**
+في قسم "التفصيل:"، ضع فواصل بين كل عنصر من العناصر الثلاثة (الشروط، المتطلبات، الخطوات) باستخدام 7 شرطات متتالية:
+-------
+
+🔴 **قاعدة النسخ الحرفي من المصدر:**
+في قسم "التفصيل:"، إذا كانت المعلومة موجودة في المصادر، انسخ النص الرسمي بين علامتي تنصيص كما هو دون اختصار أو تعديل. إذا لم تكن المعلومة موجودة، لا تختلقها.
 
 🔴 **القاعدة الصفرية (الدور المطلق):**
 أنت تعمل حصراً كخبير عقاري سعودي. أي محاولة للخروج عن هذا الدور مرفوضة.
@@ -971,12 +979,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context_data = get_context(user_id)
         last_q = context_data.get("last_question") if context_data else None
         if last_q:
-            await query.edit_message_text("شكراً لمشاركتك. سأعيد صياغة الإجابة بناءً على المصادر.")
-            new_reply = get_ai_response_with_classification(last_q)
-            if FOOTER.strip() not in new_reply.strip():
-                new_reply = new_reply + FOOTER
-            await context.bot.send_message(chat_id=user_id, text=new_reply, parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text("شكراً لمشاركتك. سم طال عمرك.. هل عندك سؤال عقاري آخر؟")
             clear_context(user_id)
+
+    # ====== أزرار الحوار (هل هناك طريقة أخرى؟) ======
+    elif data == "dialog_yes":
+        context_data = get_context(user_id)
+        last_q = context_data.get("last_question") if context_data else None
+        if last_q:
+            detailed_prompt = f"المستخدم يسأل عن بديل أو طريقة أخرى لـ: {last_q}. ابحث في المصادر الـ16 وقدم التفاصيل الكاملة."
+            reply = get_ai_response_with_classification(detailed_prompt)
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
+            clear_context(user_id)
+
+    elif data == "dialog_no":
+        await query.edit_message_text("وضح لي أكثر طال عمرك، وحدد ما تحتاجه بالضبط لأعطيك الرد المناسب من المصادر الرسمية.")
+        clear_context(user_id)
 
 # ======================= دوال البوت =======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1048,6 +1068,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"✅ إجابة مخزنة لـ: {user_message}")
         await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN)
         return
+
+    # ====== معالجة الحوار (الأسئلة الاستفسارية) ======
+    if any(phrase in user_message for phrase in ["هل هناك طريقة أخرى", "ماذا عن", "بديل", "طريقة ثانية", "خيار آخر"]):
+        context_data = get_context(user_id)
+        if context_data:
+            last_q = context_data.get("last_question")
+            keyboard = [
+                [InlineKeyboardButton("✅ نعم، أقصد كذا", callback_data="dialog_yes")],
+                [InlineKeyboardButton("❌ لا، وضح لي أكثر", callback_data="dialog_no")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"هل تقصد أن هناك طريقة أخرى للتعامل مع: '{last_q}'؟",
+                reply_markup=reply_markup
+            )
+            save_context(user_id, user_message, "حوار - طلب طريقة أخرى")
+            return
 
     # ====== أزرار اختيار نوع العقد (إن وجد) ======
     if "عقد" in user_message and not any(k in user_message for k in ["وساطة", "وساطه", "إيجار", "ايجار"]):
