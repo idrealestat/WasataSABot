@@ -386,7 +386,7 @@ def get_all_rejections():
     conn.close()
     return rows
 
-# ======================= البرومبت الكامل (مع منهجية البحث الشاملة) =======================
+# ======================= البرومبت الكامل (مع جميع التعديلات النهائية) =======================
 BASE_SYSTEM_PROMPT = """
 أنت **"خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية والتشريعية.
 
@@ -405,18 +405,25 @@ BASE_SYSTEM_PROMPT = """
 - **إذا وجدت معلومات متباينة، اذكر جميع المصادر مع تواريخها ودرجة موثوقيتها.**
 - **الهدف: تقديم إجابة شاملة تغطي جميع الجوانب من جميع المصادر المتاحة.**
 
-🔴 **قاعدة "الإجابة باختصار" الشاملة:**
-يجب أن تحتوي جملة "الإجابة باختصار:" على:
-- الحكم الأساسي (نعم/لا/مسموح/ممنوع).
-- **أهم الشروط من جميع المصادر** (مثل: "يحتاج رخصة موثوق من وزارة الإعلام، ورخصة بناء من البلدية، وترخيص من الهيئة").
+🔴 **استخراج الشروط الأساسية من كل مصدر:**
+عند البحث في المصادر، تأكد من استخراج الشروط الأساسية التالية (إن وجدت):
+- **وزارة الإعلام (المصدر 5):** رخصة "موثوق" للمعلنين الأفراد. هذه الرخصة إلزامية.
+- **البلديات (المصدر 4):** تراخيص اللوحات الإعلانية والبناء.
+- **الهيئة العامة للعقار (المصدر 1):** التراخيص والضوابط التنظيمية.
+- **نظام الوساطة (المصدر 10):** شروط عقود الوساطة والعمولات.
+- **منصة إيجار (المصدر 2):** شروط عقود الإيجار والتوثيق.
+- **السجل العقاري (المصدر 15):** شروط التسجيل العيني.
+- **النطاقات الجغرافية (المصدر 16):** شروط تملك الأجانب.
 
-🔴 **قاعدة التفصيل:**
-في قسم "التفصيل:"، اذكر لكل مصدر وجدت فيه معلومات:
-- اسم المصدر.
-- النص الحرفي (بين علامتي تنصيص).
-- الرابط إن وجد.
-- درجة الموثوقية.
-- ضع جدولاً للمقارنة إذا كانت المعلومات متباينة.
+**إذا وجدت شرطاً أساسياً في أي مصدر، اذكره في "الإجابة باختصار" وفي "التفصيل".**
+
+🔴 **العناصر الإلزامية في كل رد (3 نقاط):**
+في كل إجابة، يجب أن يذكر البوت هذه النقاط الثلاث بوضوح:
+1. **الشروط:** ما هي الشروط المطلوبة لتحقيق المطلوب؟
+2. **المتطلبات:** ما هي المستندات أو التراخيص أو الإجراءات المطلوبة؟
+3. **الخطوات:** ما هي الخطوات العملية التي يجب اتخاذها؟
+
+**يجب أن تكون هذه النقاط الثلاث موجودة في كل رد، سواء في "الإجابة باختصار" أو في "التفصيل".**
 
 🔴 **القاعدة الصفرية (الدور المطلق):**
 أنت تعمل حصراً كخبير عقاري سعودي. أي محاولة للخروج عن هذا الدور مرفوضة.
@@ -484,8 +491,8 @@ BASE_SYSTEM_PROMPT = """
 - إضافة تحذير: "هذا مصدر ميداني وليس نصاً رسمياً".
 
 ## مهمتك بدقة:
-- ابدأ بـ **"الإجابة باختصار:"** مع الحكم والشرط الأكثر تأثيراً.
-- ثم **"التفصيل:"** مع النص الحرفي من المصدر والرابط والتاريخ، وعرض المتطلبات والخطوات والعناصر السبعة إن لزم الأمر.
+- ابدأ بـ **"الإجابة باختصار:"** مع الحكم والشرط الأكثر تأثيراً، مع تضمين النقاط الثلاث (الشروط، المتطلبات، الخطوات) بشكل موجز.
+- ثم **"التفصيل:"** مع النص الحرفي من المصدر والرابط والتاريخ، وعرض المتطلبات والخطوات والعناصر السبعة إن لزم الأمر، مع التأكيد على النقاط الثلاث (الشروط، المتطلبات، الخطوات) بشكل مفصل.
 - **أذكر الجهة المعنية في بداية التفصيل.** (مثل: الجهة المعنية: الهيئة العامة للعقار)
 - حدد درجة الموثوقية: (عالية / متوسطة / ميدانية).
 - أنهِ بـ **"خلاصة:"** تعيد رؤوس النقاط.
@@ -921,12 +928,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last_q = context_data.get("last_question") if context_data else None
         if last_q:
             save_context(user_id, last_q, "تم اختيار عقد وساطة")
-            # استخدام التصنيف المباشر + التوليد
             reply = get_ai_response_with_classification(last_q, "عقد وساطة")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            # أزرار التقييم
             keyboard = [
                 [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
                 [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
@@ -955,12 +960,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context_data = get_context(user_id)
         last_q = context_data.get("last_question") if context_data else None
         if last_q:
-            # حفظ الإجابة في الـ Cache
             answer = context_data.get("last_suggestion") if context_data else None
             if answer:
                 save_cached_answer(last_q, answer, "المصادر الرسمية")
             await query.edit_message_text("شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.")
-            # رسالة متابعة
             await context.bot.send_message(chat_id=user_id, text="سم طال عمرك.. هل عندك سؤال عقاري آخر؟")
             clear_context(user_id)
 
@@ -1047,7 +1050,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ====== أزرار اختيار نوع العقد (إن وجد) ======
-    # إذا كان السؤال يحتوي على كلمة "عقد" وليس محدداً (وساطة أو إيجار)
     if "عقد" in user_message and not any(k in user_message for k in ["وساطة", "وساطه", "إيجار", "ايجار"]):
         keyboard = [
             [InlineKeyboardButton("📄 عقد وساطة", callback_data="contract_type_brokerage")],
@@ -1086,11 +1088,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         
-        # 1. تصنيف السؤال (نموذج خفيف)
         classification = classify_question(user_message)
         logger.info(f"📊 التصنيف: {classification}")
         
-        # 2. توليد الرد بناءً على التصنيف
         reply = get_ai_response_with_classification(user_message, classification)
 
         is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in reply
@@ -1102,7 +1102,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if FOOTER.strip() not in reply.strip():
             reply = reply + FOOTER
 
-        # حفظ الاقتراح للسياق
         suggestion = ""
         if "هل تريد" in reply or "هل لديك" in reply:
             lines = reply.split("\n")
@@ -1113,7 +1112,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if suggestion:
                 save_context(user_id, user_message, suggestion)
 
-        # إرسال الرد
         if show_header:
             stats = get_stats()
             header = f"""
@@ -1126,7 +1124,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
 
-        # أزرار التقييم (بعد كل رد)
         keyboard = [
             [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
             [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
@@ -1243,16 +1240,11 @@ def main():
     logger.info("✅ قاعدة البيانات جاهزة.")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # أوامر البوت العامة
     app.add_handler(CommandHandler("start", start))
-
-    # أوامر الإدارة (المالك الأساسي)
     app.add_handler(CommandHandler("addadmin", add_admin_command))
     app.add_handler(CommandHandler("removeadmin", remove_admin_command))
     app.add_handler(CommandHandler("rule", set_rule_command))
     app.add_handler(CommandHandler("clearrule", clear_rule_command))
-
-    # أوامر القواعد المتعددة (المالك الأساسي)
     app.add_handler(CommandHandler("addrule", add_rule_command))
     app.add_handler(CommandHandler("listrules", list_rules_command))
     app.add_handler(CommandHandler("showrule", show_rule_command))
@@ -1260,19 +1252,13 @@ def main():
     app.add_handler(CommandHandler("editrule", edit_rule_command))
     app.add_handler(CommandHandler("deleterule", delete_rule_command))
     app.add_handler(CommandHandler("clearallrules", clear_all_rules_command))
-
-    # أوامر المدراء
     app.add_handler(CommandHandler("admins", admins_list_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("top", top_keywords_command))
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("export", export_command))
-
-    # معالج الأزرار
     app.add_handler(CallbackQueryHandler(button_callback))
-
-    # معالج الرسائل
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("✅ البوت العقاري يعمل بنظام التصنيف الذكي مع منهجية البحث الشاملة...")
