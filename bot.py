@@ -399,7 +399,7 @@ def get_all_rejections():
     conn.close()
     return rows
 
-# ======================= البرومبت المختصر الجديد (مع تعليمات بحث صارمة) =======================
+# ======================= البرومبت المختصر الجديد (مع عناوين واضحة) =======================
 BASE_SYSTEM_PROMPT = """
 أنت **خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 
@@ -407,11 +407,12 @@ BASE_SYSTEM_PROMPT = """
 أنت تعمل حصراً كخبير عقاري سعودي. الرد على أي سؤال غير عقاري هو: "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
 
 🔴 **مهمتك الآن:**
-قدّم **رداً مختصراً شاملاً** يحتوي على:
-1. الجهة المعنية (مثل: الهيئة العامة للعقار، وزارة الإعلام، البلدية).
-2. الحكم الأساسي (نعم/لا/مسموح/ممنوع).
-3. أهم شرط أو استثناء يغير الحكم.
-4. خلاصة سريعة جداً للشروط والمتطلبات والخطوات (جملة واحدة لكل منها، لا تذكر التفاصيل الكاملة).
+قدّم **رداً مختصراً شاملاً** يحتوي على الأقسام التالية بوضوح (مع عناوينها):
+1. **الجهة المعنية:** (مثل: الهيئة العامة للعقار، وزارة الإعلام، البلدية).
+2. **الحكم:** (نعم/لا/مسموح/ممنوع).
+3. **مختصر الشروط:** (أهم الشروط القانونية مختصرة، وليست مفصلة).
+4. **مختصر المتطلبات:** (أهم المستندات والتراخيص مختصرة).
+5. **مختصر الخطوات:** (أهم الخطوات العملية مختصرة).
 
 **🔴 تعليمات البحث الإلزامية (يجب تنفيذها بدقة):**
 - المصادر الـ16 المذكورة أدناه هي مصدرك الوحيد.
@@ -445,11 +446,11 @@ BASE_SYSTEM_PROMPT = """
 
 ## التنسيق المطلوب:
 - ابدأ بـ "📌 **الإجابة المختصرة:**"
-- اذكر الجهة، الحكم، أهم شرط، وخلاصة سريعة جداً.
-- لا تذكر التفاصيل الكاملة (الشروط، المتطلبات، الخطوات التفصيلية) هنا.
+- ثم اذكر الأقسام الخمسة بالترتيب مع عناوينها كما هو مطلوب أعلاه.
+- لا تذكر التفاصيل الكاملة (الشروط التفصيلية، المتطلبات الكاملة، الخطوات التفصيلية) هنا.
 - **بعد الإجابة، أضف سطراً فارغاً، ثم هذا النص بالخط العريض:**
   
-**🔍 هل تريد معلومات إضافية؟ اختر من الأزرار أدناه:**
+**🔍 اختر من الأزرار أدناه للحصول على التفاصيل:**
 
 عند بدء التشغيل: "تفضل: هل لديك سؤال عقاري؟"
 """
@@ -539,13 +540,13 @@ def get_ai_summary_response(user_message: str) -> str:
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=600  # زيادة طفيفة لإعطاء مساحة للبحث
+            max_tokens=700  # زيادة طفيفة لإعطاء مساحة للعناوين الخمسة
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
             # التأكد من وجود الفاصل المطلوب
-            if "🔍 هل تريد معلومات إضافية؟" not in reply:
-                reply = reply + "\n\n**🔍 هل تريد معلومات إضافية؟ اختر من الأزرار أدناه:**"
+            if "🔍 اختر من الأزرار أدناه" not in reply:
+                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل:**"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل توليد الرد المختصر: {e}")
@@ -559,12 +560,12 @@ def get_ai_summary_response(user_message: str) -> str:
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=600
+            max_tokens=700
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
-            if "🔍 هل تريد معلومات إضافية؟" not in reply:
-                reply = reply + "\n\n**🔍 هل تريد معلومات إضافية؟ اختر من الأزرار أدناه:**"
+            if "🔍 اختر من الأزرار أدناه" not in reply:
+                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل:**"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل Gemini: {e}")
@@ -920,22 +921,28 @@ async def clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_
 
     await request_secret_confirmation(update, context, "clear_all_rules", {})
 
-# ======================= بناء لوحة المفاتيح التفاعلية =======================
+# ======================= بناء لوحة المفاتيح التفاعلية (بالترتيب المطلوب) =======================
 def get_main_keyboard():
-    """إرجاع لوحة المفاتيح الكاملة (6 أزرار رئيسية + نعم/لا)."""
+    """إرجاع لوحة المفاتيح بالترتيب: صفوف متجانسة (زرين) ثم الأزرار السفلية."""
     keyboard = [
-        [InlineKeyboardButton("📄 التفاصيل من المصادر", callback_data="detail_source")],
-        [InlineKeyboardButton("📋 المتطلبات", callback_data="detail_requirements")],
-        [InlineKeyboardButton("⚖️ الشروط", callback_data="detail_conditions")],
-        [InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps")],
-        [InlineKeyboardButton("🛠️ الإجراءات", callback_data="detail_procedures")],
-        [InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")]
+        # الصف الأول: الرد المختصر + التفاصيل من المصادر
+        [InlineKeyboardButton("📌 الرد المختصر", callback_data="show_summary"),
+         InlineKeyboardButton("📄 التفاصيل من المصادر", callback_data="detail_source")],
+        # الصف الثاني: المتطلبات + الشروط
+        [InlineKeyboardButton("📋 المتطلبات", callback_data="detail_requirements"),
+         InlineKeyboardButton("⚖️ الشروط", callback_data="detail_conditions")],
+        # الصف الثالث: الخطوات + الإجراءات
+        [InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps"),
+         InlineKeyboardButton("🛠️ الإجراءات", callback_data="detail_procedures")],
+        # الصف الرابع: سؤال عقاري آخر (زر واحد في المنتصف أو كامل العرض)
+        [InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")],
+        # الصف الخامس: زر وهمي (لا يؤدي إلى شيء)
+        [InlineKeyboardButton("❓ هل هذه الإجابة مفيدة؟", callback_data="dummy_feedback")],
+        # الصف السادس: نعم / لا (متجانبان)
+        [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes"),
+         InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
     ]
-    feedback_row = [
-        [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
-        [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-    ]
-    return InlineKeyboardMarkup(keyboard + feedback_row)
+    return InlineKeyboardMarkup(keyboard)
 
 # ======================= معالج الأزرار =======================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -946,14 +953,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context_data = get_context(user_id)
     last_q = context_data.get("last_question") if context_data else None
+    last_summary = context_data.get("last_suggestion") if context_data else None
+
+    # ====== زر "الرد المختصر" ======
+    if data == "show_summary":
+        if last_summary:
+            # نعرض الملخص المخزن مع لوحة المفاتيح نفسها
+            await query.edit_message_text(last_summary, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("لم أجد رداً مختصراً سابقاً. اطرح سؤالاً جديداً.")
 
     # ====== أزرار التفاصيل (5 أقسام) ======
-    if data == "detail_source":
+    elif data == "detail_source":
         if last_q:
             reply = get_section_response(last_q, "source")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            # تعديل الرسالة الحالية لعرض التفاصيل
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
@@ -1007,8 +1022,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
             ])
         )
-        # نغلق الرسالة الحالية (نحولها إلى زر غير قابل للتفاعل)
+        # نغلق أزرار الرسالة الحالية
         await query.edit_message_reply_markup(reply_markup=None)
+
+    # ====== زر وهمي (لا يؤدي إلى شيء) ======
+    elif data == "dummy_feedback":
+        # لا نقوم بأي شيء، فقط نمنع ظهور خطأ
+        pass
 
     # ====== زر "النطاقات الجغرافية" ======
     elif data == "zones":
@@ -1045,7 +1065,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             answer = context_data.get("last_suggestion") if context_data else None
             if answer:
                 save_cached_answer(last_q, answer, "المصادر الرسمية")
-            # إرسال رسالة جديدة بدلاً من تعديل الحالية
+            # إرسال رسالة جديدة
             await context.bot.send_message(
                 chat_id=user_id,
                 text="شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
@@ -1077,7 +1097,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ====== أزرار التوضيح القديمة ======
     elif data in ["clarify_conditions", "clarify_requirements", "clarify_steps", "clarify_all", "clarify_other", "confirm_yes", "confirm_no"]:
         await query.edit_message_text(
-            "🔄 تم تحديث نظام البوت. الرجاء استخدام الأزرار الجديدة (📄 التفاصيل من المصادر، 📋 المتطلبات، ⚖️ الشروط، 📝 الخطوات، 🛠️ الإجراءات) للحصول على المعلومات المطلوبة.",
+            "🔄 تم تحديث نظام البوت. الرجاء استخدام الأزرار الجديدة للحصول على المعلومات المطلوبة.",
             reply_markup=get_main_keyboard()
         )
         clear_context(user_id)
@@ -1169,7 +1189,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if FOOTER.strip() not in reply.strip():
             reply = reply + FOOTER
 
-        # حفظ السياق (السؤال الأصلي)
+        # حفظ السياق (السؤال الأصلي والرد المختصر)
         save_context(user_id, user_message, reply)
 
         if show_header:
@@ -1314,7 +1334,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية...")
+    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية (ترتيب جديد)...")
 
     # ======================= حل مشكلة Conflict =======================
     async def delete_webhook():
