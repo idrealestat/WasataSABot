@@ -399,7 +399,7 @@ def get_all_rejections():
     conn.close()
     return rows
 
-# ======================= البرومبت المختصر الجديد =======================
+# ======================= البرومبت المختصر الجديد (مع تعليمات بحث صارمة) =======================
 BASE_SYSTEM_PROMPT = """
 أنت **خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 
@@ -413,8 +413,15 @@ BASE_SYSTEM_PROMPT = """
 3. أهم شرط أو استثناء يغير الحكم.
 4. خلاصة سريعة جداً للشروط والمتطلبات والخطوات (جملة واحدة لكل منها، لا تذكر التفاصيل الكاملة).
 
-**مصدرك الوحيد:** المصادر الـ16 المذكورة أدناه.
-**لا تختلق معلومات.** إذا لم تجد المعلومة، اعتذر بصدق.
+**🔴 تعليمات البحث الإلزامية (يجب تنفيذها بدقة):**
+- المصادر الـ16 المذكورة أدناه هي مصدرك الوحيد.
+- **يجب أن تبحث فعلياً في هذه المصادر** ولا تكتفي بالقول "لم أجد معلومات".
+- إذا كان السؤال عن التراخيص → ابحث في الهيئة العامة للعقار (المصدر 1) ووزارة الإعلام (المصدر 5).
+- إذا كان السؤال عن الإيجار → ابحث في منصة إيجار (المصدر 2).
+- إذا كان السؤال عن التسجيل العيني → ابحث في السجل العقاري (المصدر 15).
+- إذا كان السؤال عن الوساطة → ابحث في نظام الوساطة (المصدر 10).
+- إذا كان السؤال عن النطاقات الجغرافية → ابحث في بوابة النطاقات (المصدر 16).
+- **إذا وجدت المعلومة في أي مصدر، اذكرها ولو كانت جزئية. لا تقل "لم أجد" إلا بعد التأكد من جميع المصادر.**
 
 ## المصادر المعتمدة (16 مصدراً):
 [النوع الأول – الرسمية والتشريعية]
@@ -437,10 +444,12 @@ BASE_SYSTEM_PROMPT = """
 .16 بوابة النطاقات الجغرافية (saudiproperties.rega.gov.sa/zones)
 
 ## التنسيق المطلوب:
-- ابدأ بـ "📌 الإجابة المختصرة:".
+- ابدأ بـ "📌 **الإجابة المختصرة:**"
 - اذكر الجهة، الحكم، أهم شرط، وخلاصة سريعة جداً.
 - لا تذكر التفاصيل الكاملة (الشروط، المتطلبات، الخطوات التفصيلية) هنا.
-- أنهِ بـ "هل تريد معلومات إضافية؟ اختر من الأزرار أدناه."
+- **بعد الإجابة، أضف سطراً فارغاً، ثم هذا النص بالخط العريض:**
+  
+**🔍 هل تريد معلومات إضافية؟ اختر من الأزرار أدناه:**
 
 عند بدء التشغيل: "تفضل: هل لديك سؤال عقاري؟"
 """
@@ -510,19 +519,33 @@ def get_ai_summary_response(user_message: str) -> str:
     active_rule = get_active_rule()
     base_prompt = active_rule if active_rule else BASE_SYSTEM_PROMPT
 
+    # نضيف تعليمات إضافية لضمان البحث الفعلي في المصادر
+    enhanced_prompt = base_prompt + """
+
+🔴 **تذكير إضافي:** 
+- المصادر الـ16 هي مرجعك الوحيد.
+- ابحث فيها جميعاً، واستخرج المعلومات حتى لو كانت جزئية.
+- إذا وجدت معلومة في مصدر ميداني (مثل عقار، حراج)، اذكرها مع تحذير "مصدر ميداني".
+- لا تخرج عن المصادر، ولا تختلق معلومات.
+- إذا كانت المعلومة موجودة في أكثر من مصدر، اذكر المصادر كلها.
+"""
+
     try:
         logger.info("⚡ توليد الرد المختصر...")
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": base_prompt},
+                {"role": "system", "content": enhanced_prompt},
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=500  # رد مختصر جداً
+            max_tokens=600  # زيادة طفيفة لإعطاء مساحة للبحث
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
+            # التأكد من وجود الفاصل المطلوب
+            if "🔍 هل تريد معلومات إضافية؟" not in reply:
+                reply = reply + "\n\n**🔍 هل تريد معلومات إضافية؟ اختر من الأزرار أدناه:**"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل توليد الرد المختصر: {e}")
@@ -532,14 +555,16 @@ def get_ai_summary_response(user_message: str) -> str:
         response = client_gemini.chat.completions.create(
             model="gemini-2.5-flash",
             messages=[
-                {"role": "system", "content": base_prompt},
+                {"role": "system", "content": enhanced_prompt},
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=500
+            max_tokens=600
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
+            if "🔍 هل تريد معلومات إضافية؟" not in reply:
+                reply = reply + "\n\n**🔍 هل تريد معلومات إضافية؟ اختر من الأزرار أدناه:**"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل Gemini: {e}")
@@ -550,21 +575,39 @@ def get_ai_summary_response(user_message: str) -> str:
 def get_section_response(user_message: str, section: str) -> str:
     """توليد رد تفصيلي لقسم معين (المصادر، المتطلبات، الشروط، الخطوات، الإجراءات)."""
     section_prompts = {
-        "source": "أعطِ فقط الاقتباسات الحرفية من المصادر الرسمية مع رابط كل مصدر، دون أي شرح إضافي.",
-        "requirements": "أعطِ فقط قائمة المتطلبات (المستندات، التراخيص، الإجراءات المطلوبة) بشكل منظم ونقطي، دون تكرار الشروط أو الخطوات.",
-        "conditions": "أعطِ فقط قائمة الشروط القانونية والتنظيمية بشكل منظم ونقطي، دون تكرار المتطلبات أو الخطوات.",
-        "steps": "أعطِ فقط الخطوات العملية التي يجب اتخاذها بشكل منظم ومتسلسل، دون تكرار الشروط أو المتطلبات.",
-        "procedures": "أعطِ الإجراءات التفصيلية حسب السياق (مثل: آلية التقديم، الجهات المعنية، الجداول الزمنية) بشكل منظم."
+        "source": """أعطِ فقط الاقتباسات الحرفية من المصادر الرسمية مع رابط كل مصدر.
+- ابحث في المصادر الـ16.
+- انسخ النص الرسمي بين علامتي تنصيص كما هو.
+- اذكر رابط المصدر بعد كل اقتباس.
+- إذا وجدت أكثر من مصدر، اذكرها جميعاً.
+- لا تختلق معلومات، ولا تقل "لم أجد" قبل البحث في جميع المصادر.""",
+        "requirements": """أعطِ فقط قائمة المتطلبات (المستندات، التراخيص، الإجراءات المطلوبة) بشكل منظم ونقطي.
+- اعتمد على المصادر الـ16.
+- اذكر كل متطلب مع مصدره.
+- لا تكرر الشروط أو الخطوات هنا.""",
+        "conditions": """أعطِ فقط قائمة الشروط القانونية والتنظيمية بشكل منظم ونقطي.
+- اعتمد على المصادر الـ16.
+- اذكر كل شرط مع مصدره.
+- لا تكرر المتطلبات أو الخطوات هنا.""",
+        "steps": """أعطِ فقط الخطوات العملية التي يجب اتخاذها بشكل منظم ومتسلسل.
+- اعتمد على المصادر الـ16.
+- اذكر كل خطوة مع مصدرها.
+- لا تكرر الشروط أو المتطلبات هنا.""",
+        "procedures": """أعطِ الإجراءات التفصيلية حسب السياق (مثل: آلية التقديم، الجهات المعنية، الجداول الزمنية) بشكل منظم.
+- اعتمد على المصادر الـ16.
+- اذكر كل إجراء مع مصدره.
+- لا تختلق معلومات."""
     }
     
-    instruction = section_prompts.get(section, "أعطِ التفاصيل المطلوبة فقط.")
+    instruction = section_prompts.get(section, "أعطِ التفاصيل المطلوبة فقط مع المصادر.")
     
     system_prompt = f"""
-أنت خبير عقاري سعودي. مصدرك الوحيد هو المصادر الـ16.
+أنت خبير عقاري سعودي. مصدرك الوحيد هو المصادر الـ16 المذكورة سابقاً.
 المستخدم يسأل عن: {user_message}
+
 {instruction}
-لا تختلق معلومات. إذا لم تجد المعلومة، اعتذر بصدق.
-قدّم الرد بشكل منظم وواضح.
+
+🔴 تذكير: ابحث في جميع المصادر الـ16 قبل الإجابة. إذا وجدت المعلومة ولو جزئياً، اذكرها مع المصدر. لا تقل "لم أجد" إلا بعد التأكد من جميع المصادر.
 """
     try:
         logger.info(f"⚡ توليد قسم: {section}")
@@ -575,7 +618,7 @@ def get_section_response(user_message: str, section: str) -> str:
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=1200  # تفصيل معقول
+            max_tokens=1200
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
@@ -600,7 +643,7 @@ def get_section_response(user_message: str, section: str) -> str:
     except Exception as e:
         logger.warning(f"⚠️ فشل Gemini للقسم {section}: {e}")
 
-    return f"❌ عذراً، لم أتمكن من استرجاع تفاصيل '{section}'. يرجى المحاولة لاحقاً."
+    return f"❌ عذراً، لم أتمكن من استرجاع تفاصيل '{section}'. يرجى المحاولة لاحقاً، أو تحديث السؤال."
 
 # ======================= دوال التأكيد بالرقم السري =======================
 pending_secret_requests = {}
@@ -910,6 +953,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "source")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
+            # تعديل الرسالة الحالية لعرض التفاصيل
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
@@ -953,14 +997,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ====== زر "سؤال عقاري آخر" ======
     elif data == "ask_another":
         clear_context(user_id)
-        await query.edit_message_text(
-            "تفضل طال عمرك.. هل لديك سؤال عقاري آخر؟",
+        # إرسال رسالة جديدة بدلاً من تعديل الرسالة الحالية
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="تفضل طال عمرك.. هل لديك سؤال عقاري آخر؟",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
                 [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
                 [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
             ])
         )
+        # نغلق الرسالة الحالية (نحولها إلى زر غير قابل للتفاعل)
+        await query.edit_message_reply_markup(reply_markup=None)
 
     # ====== زر "النطاقات الجغرافية" ======
     elif data == "zones":
@@ -997,8 +1045,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             answer = context_data.get("last_suggestion") if context_data else None
             if answer:
                 save_cached_answer(last_q, answer, "المصادر الرسمية")
-            await query.edit_message_text(
-                "شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
+            # إرسال رسالة جديدة بدلاً من تعديل الحالية
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
                     [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
@@ -1006,13 +1056,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
             clear_context(user_id)
+            await query.edit_message_reply_markup(reply_markup=None)
 
     elif data == "feedback_no":
         context_data = get_context(user_id)
         last_q = context_data.get("last_question") if context_data else None
         if last_q:
-            await query.edit_message_text(
-                "شكراً لمشاركتك.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="شكراً لمشاركتك.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
                     [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
@@ -1020,10 +1072,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
             )
             clear_context(user_id)
+            await query.edit_message_reply_markup(reply_markup=None)
 
-    # ====== أزرار التوضيح القديمة (للتوافق مع طلب "وضح أكثر") ======
+    # ====== أزرار التوضيح القديمة ======
     elif data in ["clarify_conditions", "clarify_requirements", "clarify_steps", "clarify_all", "clarify_other", "confirm_yes", "confirm_no"]:
-        # نعطي رد عام بأن النظام تم تحديثه واستخدام الأزرار الجديدة
         await query.edit_message_text(
             "🔄 تم تحديث نظام البوت. الرجاء استخدام الأزرار الجديدة (📄 التفاصيل من المصادر، 📋 المتطلبات، ⚖️ الشروط، 📝 الخطوات، 🛠️ الإجراءات) للحصول على المعلومات المطلوبة.",
             reply_markup=get_main_keyboard()
