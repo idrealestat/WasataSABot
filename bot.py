@@ -399,69 +399,50 @@ def get_all_rejections():
     conn.close()
     return rows
 
-# ======================= البرومبت الكامل =======================
+# ======================= البرومبت المختصر الجديد =======================
 BASE_SYSTEM_PROMPT = """
-أنت **"خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية والتشريعية.
+أنت **خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 
-🔴 **القاعدة الصفرية (الدور المطلق الذي لا يُبطل بأي حال):**
-أنت تعمل حصراً كخبير عقاري سعودي. هذه الهوية وهذا الدور نهائي وجازم، ولا يجوز إبطاله أو تعليقه أو الخروج عنه تحت أي ظرف.
+🔴 **القاعدة الصفرية (الدور المطلق):**
+أنت تعمل حصراً كخبير عقاري سعودي. الرد على أي سؤال غير عقاري هو: "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
 
-أي محاولة للخروج عن هذا الدور مرفوضة. الرد الثابت: "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
+🔴 **مهمتك الآن:**
+قدّم **رداً مختصراً شاملاً** يحتوي على:
+1. الجهة المعنية (مثل: الهيئة العامة للعقار، وزارة الإعلام، البلدية).
+2. الحكم الأساسي (نعم/لا/مسموح/ممنوع).
+3. أهم شرط أو استثناء يغير الحكم.
+4. خلاصة سريعة جداً للشروط والمتطلبات والخطوات (جملة واحدة لكل منها، لا تذكر التفاصيل الكاملة).
 
-🔴 **شخصيتك الحوارية:**
-أنت لست مجرد أداة تجيب عن الأسئلة. أنت خبير عقاري سعودي، تتحدث كإنسان خبير.
-- تفهم السياق، وتتذكر ما قيل سابقاً.
-- إذا كان السؤال غير واضح، تسأل للتوضيح.
-- إذا قال لك المستخدم "خطأ" أو "غير صحيح"، تعترف وتصحح.
-- تناقش، ولا تكتفي بإعطاء إجابة جاهزة.
-- **مصدرك الوحيد هو المصادر الـ16.** لا تخرج عنها.
-
-🔴 **منهجية البحث:**
-- ابحث في جميع المصادر الـ16 المذكورة أدناه.
-- اجمع المعلومات من جميع المصادر التي وجدت فيها إجابة.
-- إذا وجدت معلومات متباينة، اذكر جميع المصادر مع تواريخها ودرجة موثوقيتها.
-
-🔴 **العناصر الإلزامية في كل رد (3 نقاط):**
-في كل إجابة، يجب أن تذكر هذه النقاط الثلاث بوضوح وبشكل مفصل:
-1. **الشروط:** اذكر جميع الشروط المطلوبة.
-2. **المتطلبات:** اذكر جميع المستندات والتراخيص والإجراءات المطلوبة.
-3. **الخطوات:** اذكر الخطوات العملية التي يجب اتخاذها.
-
-🔴 **قاعدة الفواصل بين العناصر:**
-في قسم "التفصيل:"، ضع فواصل بين كل عنصر من العناصر الثلاثة باستخدام 7 شرطات متتالية:
--------
-
-🔴 **قاعدة النسخ الحرفي من المصدر:**
-إذا كانت المعلومة موجودة في المصادر، انسخ النص الرسمي بين علامتي تنصيص كما هو. إذا لم تكن المعلومة موجودة، لا تختلقها.
+**مصدرك الوحيد:** المصادر الـ16 المذكورة أدناه.
+**لا تختلق معلومات.** إذا لم تجد المعلومة، اعتذر بصدق.
 
 ## المصادر المعتمدة (16 مصدراً):
-[النوع الأول – المصادر الرسمية والتشريعية]
-.1 الهيئة العامة للعقار (https://rega.gov.sa)
-.2 منصة إيجار (https://ejar.sa)
-.3 منصة سكني (https://sakani.sa)
+[النوع الأول – الرسمية والتشريعية]
+.1 الهيئة العامة للعقار (rega.gov.sa)
+.2 منصة إيجار (ejar.sa)
+.3 منصة سكني (sakani.sa)
 .4 البلديات وأمانات المناطق
-.5 وزارة الإعلام (https://media.gov.sa) – وتشمل رخصة "موثوق"
+.5 وزارة الإعلام (media.gov.sa) – رخصة "موثوق"
 .6 الجريدة الرسمية (أم القرى)
-.7 الحسابات الرسمية الموثقة للجهات
+.7 الحسابات الرسمية الموثقة
 .8 وزارة الإعلام
 .9 وزارة البلديات والإسكان
 .10 نظام الوساطة العقارية (م/130)
 .11 اللائحة التنظيمية للتسويق والإعلانات العقارية
-[النوع الثاني – المصادر الميدانية]
+[النوع الثاني – الميدانية]
 .12 عقار، بيوت السعوديه، ديل، وصلت، حراج
 .13 حسابات الوسطاء الموثقة
 .14 أي مصدر عقاري سعودي معروف
-.15 منصة السجل العقاري (https://rer.sa)
-.16 بوابة النطاقات الجغرافية (https://saudiproperties.rega.gov.sa/zones)
+.15 منصة السجل العقاري (rer.sa)
+.16 بوابة النطاقات الجغرافية (saudiproperties.rega.gov.sa/zones)
 
-## مهمتك بدقة:
-- ابدأ بـ **"الإجابة باختصار:"** مع الحكم والشرط.
-- ثم **"التفصيل:"** مع النص الحرفي من المصدر، والشروط، والمتطلبات، والخطوات.
-- حدد درجة الموثوقية: (عالية / متوسطة / ميدانية).
-- أنهِ بـ **"خلاصة:"**.
-- لا تخرج عن المصادر. إذا لم تجد المعلومة، اعتذر.
+## التنسيق المطلوب:
+- ابدأ بـ "📌 الإجابة المختصرة:".
+- اذكر الجهة، الحكم، أهم شرط، وخلاصة سريعة جداً.
+- لا تذكر التفاصيل الكاملة (الشروط، المتطلبات، الخطوات التفصيلية) هنا.
+- أنهِ بـ "هل تريد معلومات إضافية؟ اختر من الأزرار أدناه."
 
-عند بدء التشغيل: "تفضل: هل لديك اي سؤال عقاري ؟"
+عند بدء التشغيل: "تفضل: هل لديك سؤال عقاري؟"
 """
 
 # ======================= التذييل =======================
@@ -486,9 +467,8 @@ def is_api_error(response_text: str) -> bool:
     ]
     return any(indicator.lower() in response_text.lower() for indicator in error_indicators)
 
-# ======================= التصنيف (بنموذج متوفر) =======================
+# ======================= التصنيف =======================
 def classify_question(user_message: str) -> str:
-    """تصنيف السؤال باستخدام نموذج خفيف متوفر."""
     try:
         response = client_groq.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -514,13 +494,10 @@ def classify_question(user_message: str) -> str:
         logger.warning(f"⚠️ فشل التصنيف: {e}")
         return "سؤال عام"
 
-# ======================= التوليد (مع تقليل max_tokens) =======================
-def get_ai_response_with_classification(user_message: str, classification: str = None) -> str:
-    """
-    توليد الرد بناءً على التصنيف مع نظام احتياطي بسيط.
-    تم تقليل max_tokens إلى 1500 لتوفير التوكنات.
-    """
-    # ====== التحقق من الأسئلة غير العقارية ======
+# ======================= توليد الرد المختصر =======================
+def get_ai_summary_response(user_message: str) -> str:
+    """توليد الرد المختصر الشامل فقط."""
+    # التحقق من الأسئلة غير العقارية
     non_real_estate_keywords = [
         "قصة", "تاريخ", "ذو القرنين", "ديني", "ثقافي", "أدبي", "شعر", "رواية",
         "قصيدة", "نثر", "خيال", "علمي", "فلك", "نجوم", "فيزياء",
@@ -530,27 +507,67 @@ def get_ai_response_with_classification(user_message: str, classification: str =
     if any(kw in user_message for kw in non_real_estate_keywords):
         return "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
 
-    if classification is None:
-        classification = classify_question(user_message)
-
     active_rule = get_active_rule()
     base_prompt = active_rule if active_rule else BASE_SYSTEM_PROMPT
 
-    # بناء برومبت مخصص حسب التصنيف
-    if classification == "إعلان":
-        system_prompt = base_prompt + "\n🔴 ابحث في المصادر الـ16 مع التركيز على وزارة الإعلام (المصدر 5) ورخصة 'موثوق'."
-    elif classification == "عقد وساطة":
-        system_prompt = base_prompt + "\n🔴 ابحث في المصادر الـ16 مع التركيز على نظام الوساطة العقارية (م/130)."
-    elif classification == "عقد إيجار":
-        system_prompt = base_prompt + "\n🔴 ابحث في المصادر الـ16 مع التركيز على منصة إيجار."
-    elif classification == "تسجيل عيني":
-        system_prompt = base_prompt + "\n🔴 ابحث في المصادر الـ16 مع التركيز على السجل العقاري (المصدر 15)."
-    else:
-        system_prompt = base_prompt
-
-    # ========== محاولة 1: Groq (مع تقليل max_tokens) ==========
     try:
-        logger.info("⚡ باستخدام Groq...")
+        logger.info("⚡ توليد الرد المختصر...")
+        response = client_groq.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": base_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.2,
+            max_tokens=500  # رد مختصر جداً
+        )
+        reply = response.choices[0].message.content
+        if not is_api_error(reply):
+            return reply
+    except Exception as e:
+        logger.warning(f"⚠️ فشل توليد الرد المختصر: {e}")
+
+    try:
+        logger.info("🔄 باستخدام Gemini للرد المختصر...")
+        response = client_gemini.chat.completions.create(
+            model="gemini-2.5-flash",
+            messages=[
+                {"role": "system", "content": base_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.2,
+            max_tokens=500
+        )
+        reply = response.choices[0].message.content
+        if not is_api_error(reply):
+            return reply
+    except Exception as e:
+        logger.warning(f"⚠️ فشل Gemini: {e}")
+
+    return "❌ عذراً، جميع خدمات الذكاء الاصطناعي غير متاحة حالياً. يرجى المحاولة لاحقاً."
+
+# ======================= توليد الأقسام التفصيلية =======================
+def get_section_response(user_message: str, section: str) -> str:
+    """توليد رد تفصيلي لقسم معين (المصادر، المتطلبات، الشروط، الخطوات، الإجراءات)."""
+    section_prompts = {
+        "source": "أعطِ فقط الاقتباسات الحرفية من المصادر الرسمية مع رابط كل مصدر، دون أي شرح إضافي.",
+        "requirements": "أعطِ فقط قائمة المتطلبات (المستندات، التراخيص، الإجراءات المطلوبة) بشكل منظم ونقطي، دون تكرار الشروط أو الخطوات.",
+        "conditions": "أعطِ فقط قائمة الشروط القانونية والتنظيمية بشكل منظم ونقطي، دون تكرار المتطلبات أو الخطوات.",
+        "steps": "أعطِ فقط الخطوات العملية التي يجب اتخاذها بشكل منظم ومتسلسل، دون تكرار الشروط أو المتطلبات.",
+        "procedures": "أعطِ الإجراءات التفصيلية حسب السياق (مثل: آلية التقديم، الجهات المعنية، الجداول الزمنية) بشكل منظم."
+    }
+    
+    instruction = section_prompts.get(section, "أعطِ التفاصيل المطلوبة فقط.")
+    
+    system_prompt = f"""
+أنت خبير عقاري سعودي. مصدرك الوحيد هو المصادر الـ16.
+المستخدم يسأل عن: {user_message}
+{instruction}
+لا تختلق معلومات. إذا لم تجد المعلومة، اعتذر بصدق.
+قدّم الرد بشكل منظم وواضح.
+"""
+    try:
+        logger.info(f"⚡ توليد قسم: {section}")
         response = client_groq.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -558,18 +575,16 @@ def get_ai_response_with_classification(user_message: str, classification: str =
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=1500
+            max_tokens=1200  # تفصيل معقول
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
-            logger.info("✅ Groq: رد صحيح")
             return reply
     except Exception as e:
-        logger.warning(f"⚠️ فشل Groq: {e}")
+        logger.warning(f"⚠️ فشل توليد القسم {section}: {e}")
 
-    # ========== محاولة 2: Gemini (إذا كان المفتاح يعمل) ==========
     try:
-        logger.info("🔄 باستخدام Google Gemini...")
+        logger.info(f"🔄 باستخدام Gemini للقسم {section}...")
         response = client_gemini.chat.completions.create(
             model="gemini-2.5-flash",
             messages=[
@@ -577,17 +592,15 @@ def get_ai_response_with_classification(user_message: str, classification: str =
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=1500
+            max_tokens=1200
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
-            logger.info("✅ Gemini: رد صحيح")
             return reply
     except Exception as e:
-        logger.warning(f"⚠️ فشل Gemini: {e}")
+        logger.warning(f"⚠️ فشل Gemini للقسم {section}: {e}")
 
-    # ========== جميع المحاولات فشلت ==========
-    return "❌ عذراً، جميع خدمات الذكاء الاصطناعي غير متاحة حالياً. يرجى المحاولة لاحقاً."
+    return f"❌ عذراً، لم أتمكن من استرجاع تفاصيل '{section}'. يرجى المحاولة لاحقاً."
 
 # ======================= دوال التأكيد بالرقم السري =======================
 pending_secret_requests = {}
@@ -864,6 +877,23 @@ async def clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_
 
     await request_secret_confirmation(update, context, "clear_all_rules", {})
 
+# ======================= بناء لوحة المفاتيح التفاعلية =======================
+def get_main_keyboard():
+    """إرجاع لوحة المفاتيح الكاملة (6 أزرار رئيسية + نعم/لا)."""
+    keyboard = [
+        [InlineKeyboardButton("📄 التفاصيل من المصادر", callback_data="detail_source")],
+        [InlineKeyboardButton("📋 المتطلبات", callback_data="detail_requirements")],
+        [InlineKeyboardButton("⚖️ الشروط", callback_data="detail_conditions")],
+        [InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps")],
+        [InlineKeyboardButton("🛠️ الإجراءات", callback_data="detail_procedures")],
+        [InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")]
+    ]
+    feedback_row = [
+        [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
+        [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
+    ]
+    return InlineKeyboardMarkup(keyboard + feedback_row)
+
 # ======================= معالج الأزرار =======================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -871,7 +901,69 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     data = query.data
 
-    if data == "zones":
+    context_data = get_context(user_id)
+    last_q = context_data.get("last_question") if context_data else None
+
+    # ====== أزرار التفاصيل (5 أقسام) ======
+    if data == "detail_source":
+        if last_q:
+            reply = get_section_response(last_q, "source")
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
+
+    elif data == "detail_requirements":
+        if last_q:
+            reply = get_section_response(last_q, "requirements")
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
+
+    elif data == "detail_conditions":
+        if last_q:
+            reply = get_section_response(last_q, "conditions")
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
+
+    elif data == "detail_steps":
+        if last_q:
+            reply = get_section_response(last_q, "steps")
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
+
+    elif data == "detail_procedures":
+        if last_q:
+            reply = get_section_response(last_q, "procedures")
+            if FOOTER.strip() not in reply.strip():
+                reply = reply + FOOTER
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
+
+    # ====== زر "سؤال عقاري آخر" ======
+    elif data == "ask_another":
+        clear_context(user_id)
+        await query.edit_message_text(
+            "تفضل طال عمرك.. هل لديك سؤال عقاري آخر؟",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
+                [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
+                [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
+            ])
+        )
+
+    # ====== زر "النطاقات الجغرافية" ======
+    elif data == "zones":
         zones_msg = """
 🗺️ **النطاقات الجغرافية الجديدة (تحديث 2026)**
 
@@ -895,42 +987,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📞 للاستفسار: 920017183
 """
-        await query.edit_message_text(zones_msg, parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(zones_msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
-    # ====== أزرار اختيار نوع العقد ======
-    elif data == "contract_type_brokerage":
-        context_data = get_context(user_id)
-        last_q = context_data.get("last_question") if context_data else None
-        if last_q:
-            save_context(user_id, last_q, "تم اختيار عقد وساطة")
-            reply = get_ai_response_with_classification(last_q, "عقد وساطة")
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
-                [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await context.bot.send_message(chat_id=user_id, text="هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
-
-    elif data == "contract_type_rent":
-        context_data = get_context(user_id)
-        last_q = context_data.get("last_question") if context_data else None
-        if last_q:
-            save_context(user_id, last_q, "تم اختيار عقد إيجار")
-            reply = get_ai_response_with_classification(last_q, "عقد إيجار")
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            keyboard = [
-                [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
-                [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await context.bot.send_message(chat_id=user_id, text="هل أفادتك هذه الإجابة؟", reply_markup=reply_markup)
-
-    # ====== أزرار التقييم ======
+    # ====== أزرار التقييم (نعم / لا) ======
     elif data == "feedback_yes":
         context_data = get_context(user_id)
         last_q = context_data.get("last_question") if context_data else None
@@ -938,86 +997,38 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             answer = context_data.get("last_suggestion") if context_data else None
             if answer:
                 save_cached_answer(last_q, answer, "المصادر الرسمية")
-            await query.edit_message_text("شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.")
-            await context.bot.send_message(chat_id=user_id, text="سم طال عمرك.. هل عندك سؤال عقاري آخر؟")
+            await query.edit_message_text(
+                "شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
+                    [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
+                    [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
+                ])
+            )
             clear_context(user_id)
 
     elif data == "feedback_no":
         context_data = get_context(user_id)
         last_q = context_data.get("last_question") if context_data else None
         if last_q:
-            await query.edit_message_text("شكراً لمشاركتك. سم طال عمرك.. هل عندك سؤال عقاري آخر؟")
+            await query.edit_message_text(
+                "شكراً لمشاركتك.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
+                    [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
+                    [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
+                ])
+            )
             clear_context(user_id)
 
-    # ====== أزرار التوضيح ======
-    elif data == "clarify_conditions":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            detailed_prompt = f"المستخدم يطلب توضيح الشروط المتعلقة بـ: {last_q}."
-            reply = get_ai_response_with_classification(detailed_prompt)
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            clear_context(user_id)
-
-    elif data == "clarify_requirements":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            detailed_prompt = f"المستخدم يطلب توضيح المتطلبات المتعلقة بـ: {last_q}."
-            reply = get_ai_response_with_classification(detailed_prompt)
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            clear_context(user_id)
-
-    elif data == "clarify_steps":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            detailed_prompt = f"المستخدم يطلب توضيح الخطوات المتعلقة بـ: {last_q}."
-            reply = get_ai_response_with_classification(detailed_prompt)
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            clear_context(user_id)
-
-    elif data == "clarify_all":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            detailed_prompt = f"المستخدم يطلب التوضيح الكامل لـ: {last_q}."
-            reply = get_ai_response_with_classification(detailed_prompt)
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            clear_context(user_id)
-
-    elif data == "clarify_other":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            await query.edit_message_text(f"وضح لي أكثر طال عمرك، ماذا تريد توضيحه بالضبط بخصوص: '{last_q}'؟")
-            update_clarification_stage(user_id, "awaiting_clarification")
-
-    elif data == "confirm_yes":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            detailed_prompt = f"المستخدم أكد فهمه. قدم التفاصيل الكاملة لـ: {last_q}."
-            reply = get_ai_response_with_classification(detailed_prompt)
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN)
-            clear_context(user_id)
-
-    elif data == "confirm_no":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            await query.edit_message_text(f"وضح لي أكثر طال عمرك، وحدد ما تحتاجه بالضبط لأعطيك الرد المناسب بخصوص: '{last_q}'.")
-            update_clarification_stage(user_id, "awaiting_clarification")
+    # ====== أزرار التوضيح القديمة (للتوافق مع طلب "وضح أكثر") ======
+    elif data in ["clarify_conditions", "clarify_requirements", "clarify_steps", "clarify_all", "clarify_other", "confirm_yes", "confirm_no"]:
+        # نعطي رد عام بأن النظام تم تحديثه واستخدام الأزرار الجديدة
+        await query.edit_message_text(
+            "🔄 تم تحديث نظام البوت. الرجاء استخدام الأزرار الجديدة (📄 التفاصيل من المصادر، 📋 المتطلبات، ⚖️ الشروط، 📝 الخطوات، 🛠️ الإجراءات) للحصول على المعلومات المطلوبة.",
+            reply_markup=get_main_keyboard()
+        )
+        clear_context(user_id)
 
 # ======================= دوال البوت =======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1084,89 +1095,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cached_answer = get_cached_answer(user_message)
     if cached_answer:
         logger.info(f"✅ إجابة مخزنة لـ: {user_message}")
-        await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
         return
 
     # ====== التصنيف ======
     classification = classify_question(user_message)
     logger.info(f"📊 التصنيف: {classification}")
 
-    # ====== إذا كان طلب توضيح ======
-    if classification == "طلب توضيح":
-        context_data = get_context(user_id)
-        if context_data:
-            last_q = context_data.get("last_question")
-            if last_q:
-                keyboard = [
-                    [InlineKeyboardButton("📋 الشروط", callback_data="clarify_conditions")],
-                    [InlineKeyboardButton("📄 المتطلبات", callback_data="clarify_requirements")],
-                    [InlineKeyboardButton("📝 الخطوات", callback_data="clarify_steps")],
-                    [InlineKeyboardButton("📚 كل ما سبق", callback_data="clarify_all")],
-                    [InlineKeyboardButton("❓ شيء اخر غير ما سبق", callback_data="clarify_other")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await update.message.reply_text(
-                    f"ماذا تريد توضيحه بالضبط بخصوص: '{last_q}'؟",
-                    reply_markup=reply_markup
-                )
-                save_context(user_id, user_message, "حوار - طلب توضيح", "menu")
-                return
-
-    # ====== إذا كان في مرحلة انتظار توضيح ======
-    context_data = get_context(user_id)
-    if context_data and context_data.get("clarification_stage") == "awaiting_clarification":
-        last_q = context_data.get("last_question")
-        keyboard = [
-            [InlineKeyboardButton("✅ نعم، هذا ما أقصد", callback_data="confirm_yes")],
-            [InlineKeyboardButton("❌ لا، وضح لي أكثر", callback_data="confirm_no")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            f"هل تقصد أنك تريد توضيحاً بخصوص: '{last_q}' بناءً على ما كتبته؟",
-            reply_markup=reply_markup
-        )
-        update_clarification_stage(user_id, "awaiting_confirmation")
-        return
-
-    # ====== أزرار اختيار نوع العقد ======
-    if "عقد" in user_message and not any(k in user_message for k in ["وساطة", "وساطه", "إيجار", "ايجار"]):
-        keyboard = [
-            [InlineKeyboardButton("📄 عقد وساطة", callback_data="contract_type_brokerage")],
-            [InlineKeyboardButton("📄 عقد إيجار", callback_data="contract_type_rent")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("هل تقصد **عقد وساطة** أم **عقد إيجار**؟", reply_markup=reply_markup)
-        save_context(user_id, user_message, "طلب توضيح نوع العقد")
-        return
-
-    # ====== تم إيقاف YouTube ======
-
-    # ====== السياق (طلب تفاصيل إضافية) ======
-    context_data = get_context(user_id)
-    if context_data:
-        last_suggestion = context_data.get("last_suggestion")
-        last_question_time = context_data.get("last_question_time")
-        if last_suggestion and last_question_time:
-            try:
-                time_diff = datetime.now() - datetime.fromisoformat(last_question_time)
-                if time_diff.total_seconds() < 300:
-                    yes_words = ["نعم", "ايوه", "اجل", "أريد", "ابغى", "تفضل", "اوكي", "ok", "yes"]
-                    if any(word in user_message.lower() for word in yes_words):
-                        detailed_prompt = f"المستخدم يسأل: {context_data['last_question']}\nويريد التفاصيل الكاملة."
-                        reply = get_ai_response_with_classification(context_data['last_question'])
-                        if FOOTER.strip() not in reply.strip():
-                            reply = reply + FOOTER
-                        await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
-                        clear_context(user_id)
-                        return
-            except:
-                pass
-
-    # ====== التوليد ======
+    # ====== توليد الرد المختصر ======
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         
-        reply = get_ai_response_with_classification(user_message, classification)
+        reply = get_ai_summary_response(user_message)
 
         is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in reply
         if is_apology:
@@ -1177,15 +1117,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if FOOTER.strip() not in reply.strip():
             reply = reply + FOOTER
 
-        suggestion = ""
-        if "هل تريد" in reply or "هل لديك" in reply:
-            lines = reply.split("\n")
-            for line in reversed(lines):
-                if "هل تريد" in line or "هل لديك" in line:
-                    suggestion = line
-                    break
-            if suggestion:
-                save_context(user_id, user_message, suggestion)
+        # حفظ السياق (السؤال الأصلي)
+        save_context(user_id, user_message, reply)
 
         if show_header:
             stats = get_stats()
@@ -1195,17 +1128,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👥 **عدد المستخدمين الحالي:** {stats['total_users']}
 📊 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d')}
 """
-            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
         else:
-            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
-
-        # أزرار التقييم
-        keyboard = [
-            [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes")],
-            [InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("هل أفادتك هذه الإجابة？", reply_markup=reply_markup)
+            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
     except Exception as e:
         logger.error(f"❌ خطأ في handle_message: {e}")
@@ -1337,7 +1262,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بنظام التصنيف الذكي مع منهجية البحث الشاملة...")
+    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية...")
 
     # ======================= حل مشكلة Conflict =======================
     async def delete_webhook():
