@@ -5,6 +5,9 @@ import csv
 import io
 import asyncio
 import re
+import json
+import hashlib
+import difflib
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -37,12 +40,65 @@ if OPENROUTER_API_KEY:
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ======================= دوال تطبيع النص العربي =======================
+def normalize_arabic(text: str) -> str:
+    """تطبيع النص العربي: إزالة التشكيل، توحيد الألف والهمزات، إزالة علامات الترقيم الزائدة."""
+    if not text:
+        return ""
+    # توحيد الألف
+    text = text.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ى", "ا")
+    # توحيد التاء المربوطة
+    text = text.replace("ة", "ه")
+    # إزالة التشكيل (حركات قصيرة)
+    text = re.sub(r'[\u064B-\u0652]', '', text)
+    # إزالة علامات الترقيم غير الضرورية
+    text = re.sub(r'[،؛؟!()\[\]{}"\'.,;:?!\-]', ' ', text)
+    # تقليل المسافات المتعددة
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+# ======================= دوال التصحيح الإملائي البسيط =======================
+SPELLING_CORRECTIONS = {
+    "افراغ": "إفراغ",
+    "ايجار": "إيجار",
+    "سكني": "سكني",
+    "تجاري": "تجاري",
+    "تسجيل": "تسجيل",
+    "وساطة": "وساطة",
+    "مزاد": "مزاد",
+    "ترخيص": "ترخيص",
+    "مطالبة": "مطالبة",
+    "عربون": "عربون",
+    "انهاء": "إنهاء",
+}
+
+def correct_spelling(text: str) -> str:
+    """تصحيح الأخطاء الإملائية الشائعة."""
+    words = text.split()
+    corrected = []
+    for word in words:
+        # إذا كانت الكلمة في القاموس، استبدلها
+        if word in SPELLING_CORRECTIONS:
+            corrected.append(SPELLING_CORRECTIONS[word])
+        else:
+            # محاولة المطابقة الجزئية
+            found = False
+            for misspelled, correct in SPELLING_CORRECTIONS.items():
+                if misspelled in word or word in misspelled:
+                    corrected.append(correct)
+                    found = True
+                    break
+            if not found:
+                corrected.append(word)
+    return " ".join(corrected)
+
 # ======================= قاعدة البيانات =======================
 DB_PATH = "bot_data.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # جداول المستخدمين والأسئلة والكلمات المفتاحية والرفض
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         username TEXT,
@@ -64,6 +120,7 @@ def init_db():
         question_text TEXT,
         timestamp TEXT
     )''')
+    # جدول سياق المحادثة مع إضافة حقل youtube_links
     c.execute('''CREATE TABLE IF NOT EXISTS conversation_context (
         user_id INTEGER PRIMARY KEY,
         last_question TEXT,
@@ -73,12 +130,14 @@ def init_db():
         classification TEXT DEFAULT '',
         youtube_links TEXT DEFAULT ''
     )''')
+    # جداول الإدارة
     c.execute('''CREATE TABLE IF NOT EXISTS admins (
         user_id INTEGER PRIMARY KEY,
         username TEXT,
         secret_code TEXT,
         added_by INTEGER,
-        added_date TEXT
+        added_date TEXT,
+        role TEXT DEFAULT 'admin'
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS bot_settings (
         key TEXT PRIMARY KEY,
@@ -100,7 +159,53 @@ def init_db():
         source TEXT,
         created_at TEXT,
         last_used TEXT,
-        usage_count INTEGER DEFAULT 1
+        usage_count INTEGER DEFAULT 1,
+        expiry_date TEXT
+    )''')
+    # جداول جديدة للميزات المتقدمة
+    c.execute('''CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        user_id INTEGER,
+        start_time TEXT,
+        end_time TEXT,
+        is_active INTEGER DEFAULT 1
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS user_preferences (
+        user_id INTEGER PRIMARY KEY,
+        city TEXT,
+        property_type TEXT,
+        price_range TEXT,
+        preferred_contact TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pending_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        action TEXT,
+        data TEXT,
+        timestamp TEXT,
+        secret_code TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        action TEXT,
+        details TEXT,
+        timestamp TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS saved_responses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        question TEXT,
+        answer TEXT,
+        saved_at TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS faq (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        question_normalized TEXT UNIQUE,
+        question_original TEXT,
+        answer TEXT,
+        source TEXT,
+        created_at TEXT
     )''')
     conn.commit()
     conn.close()
@@ -108,7 +213,7 @@ def init_db():
 def get_db_connection():
     return sqlite3.connect(DB_PATH)
 
-# ======================= دوال قاعدة البيانات =======================
+# ======================= دوال قاعدة البيانات المحدثة =======================
 def save_user(user_id, username, first_name):
     conn = get_db_connection()
     c = conn.cursor()
@@ -169,6 +274,9 @@ def save_context(user_id, last_question, last_suggestion, clarification_stage="m
     conn = get_db_connection()
     c = conn.cursor()
     now = datetime.now().isoformat()
+    # إذا كانت youtube_links قائمة أو قاموس، نحولها إلى JSON string
+    if isinstance(youtube_links, (list, dict)):
+        youtube_links = json.dumps(youtube_links, ensure_ascii=False)
     c.execute('''INSERT OR REPLACE INTO conversation_context (user_id, last_question, last_suggestion, last_question_time, clarification_stage, classification, youtube_links)
                  VALUES (?, ?, ?, ?, ?, ?, ?)''', (user_id, last_question, last_suggestion, now, clarification_stage, classification, youtube_links))
     conn.commit()
@@ -182,13 +290,19 @@ def get_context(user_id):
     row = c.fetchone()
     conn.close()
     if row:
+        # محاولة تحويل youtube_links من JSON إلى قائمة
+        youtube_links = row[5] if row[5] else ""
+        try:
+            youtube_links_parsed = json.loads(youtube_links)
+        except:
+            youtube_links_parsed = []
         return {
             "last_question": row[0],
             "last_suggestion": row[1],
             "last_question_time": row[2],
             "clarification_stage": row[3] if row[3] else "menu",
             "classification": row[4] if row[4] else "",
-            "youtube_links": row[5] if row[5] else ""
+            "youtube_links": youtube_links_parsed
         }
     return None
 
@@ -206,13 +320,16 @@ def update_clarification_stage(user_id, stage):
     conn.commit()
     conn.close()
 
+# ======================= دوال الإدارة والأمان المحدثة =======================
 def is_admin(user_id):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+    c.execute("SELECT user_id, role FROM admins WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     conn.close()
-    return row is not None
+    if row:
+        return True, row[1] if len(row) > 1 else "admin"
+    return False, None
 
 def get_admin_secret(user_id):
     conn = get_db_connection()
@@ -221,6 +338,21 @@ def get_admin_secret(user_id):
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
+
+def get_admin_role(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT role FROM admins WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def set_admin_role(user_id, role):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("UPDATE admins SET role = ? WHERE user_id = ?", (role, user_id))
+    conn.commit()
+    conn.close()
 
 def get_setting(key):
     conn = get_db_connection()
@@ -247,7 +379,7 @@ def delete_setting(key):
 def get_all_admins():
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT user_id, username, secret_code, added_by, added_date FROM admins")
+    c.execute("SELECT user_id, username, secret_code, added_by, added_date, role FROM admins")
     rows = c.fetchall()
     conn.close()
     return rows
@@ -315,7 +447,7 @@ def get_active_rule():
     conn.close()
     return row[0] if row else None
 
-# ======================= دوال Q&A Cache =======================
+# ======================= دوال Q&A Cache مع التشابه الدلالي =======================
 def normalize_text(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r'\s+', ' ', text)
@@ -325,21 +457,101 @@ def normalize_text(text: str) -> str:
 def get_cached_answer(question):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT answer FROM qa_cache WHERE question_normalized = ?", (normalize_text(question),))
+    norm_q = normalize_text(question)
+    c.execute("SELECT answer, question_original, expiry_date FROM qa_cache WHERE question_normalized = ?", (norm_q,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        # التحقق من صلاحية الإجابة
+        if row[2]:
+            expiry = datetime.fromisoformat(row[2])
+            if datetime.now() > expiry:
+                return None  # منتهية الصلاحية
+        # تحديث عدد الاستخدامات
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE qa_cache SET usage_count = usage_count + 1, last_used = ? WHERE question_normalized = ?",
+                  (datetime.now().isoformat(), norm_q))
+        conn.commit()
+        conn.close()
+        return row[0]
+    return None
+
+def get_semantic_cached_answer(question, threshold=0.85):
+    """البحث عن إجابة مخزنة بناءً على التشابه الدلالي باستخدام difflib."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT question_normalized, question_original, answer, expiry_date FROM qa_cache")
+    rows = c.fetchall()
+    conn.close()
+    norm_q = normalize_text(question)
+    best_match = None
+    best_ratio = 0.0
+    for row in rows:
+        # نطبيع السؤال المخزن أيضاً
+        stored_norm = normalize_text(row[0])
+        ratio = difflib.SequenceMatcher(None, norm_q, stored_norm).ratio()
+        if ratio > best_ratio and ratio >= threshold:
+            best_ratio = ratio
+            best_match = row
+    if best_match:
+        # التحقق من الصلاحية
+        if best_match[3]:
+            expiry = datetime.fromisoformat(best_match[3])
+            if datetime.now() > expiry:
+                return None
+        # تحديث الاستخدام
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE qa_cache SET usage_count = usage_count + 1, last_used = ? WHERE question_normalized = ?",
+                  (datetime.now().isoformat(), best_match[0]))
+        conn.commit()
+        conn.close()
+        return best_match[2]
+    return None
+
+def save_cached_answer(question, answer, source="المصادر الرسمية", expiry_days=30):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    expiry = (datetime.now() + timedelta(days=expiry_days)).isoformat()
+    c.execute('''INSERT OR REPLACE INTO qa_cache (question_normalized, question_original, answer, source, created_at, last_used, expiry_date)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)''', (normalize_text(question), question, answer, source, now, now, expiry))
+    conn.commit()
+    conn.close()
+
+def add_faq(question, answer, source="المصادر الرسمية"):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT OR IGNORE INTO faq (question_normalized, question_original, answer, source, created_at)
+                 VALUES (?, ?, ?, ?, ?)''', (normalize_text(question), question, answer, source, now))
+    conn.commit()
+    conn.close()
+
+def get_faq_answer(question):
+    conn = get_db_connection()
+    c = conn.cursor()
+    norm_q = normalize_text(question)
+    c.execute("SELECT answer FROM faq WHERE question_normalized = ?", (norm_q,))
     row = c.fetchone()
     conn.close()
     if row:
         return row[0]
-    return None
-
-def save_cached_answer(question, answer, source="المصادر الرسمية"):
+    # البحث بالتشابه الدلالي في FAQ
     conn = get_db_connection()
     c = conn.cursor()
-    now = datetime.now().isoformat()
-    c.execute('''INSERT OR REPLACE INTO qa_cache (question_normalized, question_original, answer, source, created_at, last_used)
-                 VALUES (?, ?, ?, ?, ?, ?)''', (normalize_text(question), question, answer, source, now, now))
-    conn.commit()
+    c.execute("SELECT question_normalized, answer FROM faq")
+    rows = c.fetchall()
     conn.close()
+    best_match = None
+    best_ratio = 0.0
+    for r in rows:
+        ratio = difflib.SequenceMatcher(None, norm_q, r[0]).ratio()
+        if ratio > best_ratio and ratio >= 0.85:
+            best_ratio = ratio
+            best_match = r[1]
+    return best_match
 
 # ======================= دوال الإحصائيات =======================
 def get_stats():
@@ -403,7 +615,116 @@ def get_all_rejections():
     conn.close()
     return rows
 
-# ======================= روابط اليوتيوب حسب التصنيف =======================
+def save_saved_response(user_id, question, answer):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT INTO saved_responses (user_id, question, answer, saved_at)
+                 VALUES (?, ?, ?, ?)''', (user_id, question, answer, now))
+    conn.commit()
+    conn.close()
+
+def get_saved_responses(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, question, answer, saved_at FROM saved_responses WHERE user_id = ? ORDER BY saved_at DESC", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def delete_saved_response(user_id, response_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM saved_responses WHERE id = ? AND user_id = ?", (response_id, user_id))
+    conn.commit()
+    conn.close()
+
+def set_user_preference(user_id, city, property_type, price_range):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute('''INSERT OR REPLACE INTO user_preferences (user_id, city, property_type, price_range)
+                 VALUES (?, ?, ?, ?)''', (user_id, city, property_type, price_range))
+    conn.commit()
+    conn.close()
+
+def get_user_preferences(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT city, property_type, price_range FROM user_preferences WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"city": row[0], "property_type": row[1], "price_range": row[2]}
+    return None
+
+def log_audit(user_id, action, details=""):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT INTO audit_log (user_id, action, details, timestamp)
+                 VALUES (?, ?, ?, ?)''', (user_id, action, details, now))
+    conn.commit()
+    conn.close()
+
+def save_pending_action(user_id, action, data, secret_code):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute('''INSERT INTO pending_actions (user_id, action, data, timestamp, secret_code)
+                 VALUES (?, ?, ?, ?, ?)''', (user_id, action, data, now, secret_code))
+    conn.commit()
+    conn.close()
+    return c.lastrowid
+
+def get_pending_action(user_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, action, data, timestamp FROM pending_actions WHERE user_id = ? ORDER BY timestamp DESC LIMIT 1", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"id": row[0], "action": row[1], "data": row[2], "timestamp": row[3]}
+    return None
+
+def delete_pending_action(action_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM pending_actions WHERE id = ?", (action_id,))
+    conn.commit()
+    conn.close()
+
+def get_session_id(user_id):
+    """إنشاء جلسة جديدة أو إرجاع الجلسة الحالية."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    # البحث عن جلسة نشطة
+    c.execute("SELECT session_id FROM sessions WHERE user_id = ? AND is_active = 1", (user_id,))
+    row = c.fetchone()
+    if row:
+        session_id = row[0]
+        # تحديث وقت النهاية
+        c.execute("UPDATE sessions SET end_time = ? WHERE session_id = ?", (now, session_id))
+        conn.commit()
+        conn.close()
+        return session_id
+    # إنشاء جلسة جديدة
+    session_id = f"{user_id}_{datetime.now().timestamp()}"
+    c.execute('''INSERT INTO sessions (session_id, user_id, start_time, end_time, is_active)
+                 VALUES (?, ?, ?, ?, 1)''', (session_id, user_id, now, now))
+    conn.commit()
+    conn.close()
+    return session_id
+
+def end_session(session_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    now = datetime.now().isoformat()
+    c.execute("UPDATE sessions SET is_active = 0, end_time = ? WHERE session_id = ?", (now, session_id))
+    conn.commit()
+    conn.close()
+
+# ======================= روابط اليوتيوب (محدثة) =======================
 YOUTUBE_LINKS = {
     "إفراغ عقاري (بورصة)": {
         "primary": "https://youtu.be/_0a2CbfFmMA",
@@ -457,41 +778,50 @@ YOUTUBE_LINKS = {
     }
 }
 
-# ======================= دالة استرجاع روابط اليوتيوب الموحدة (ترجع قائمة) =======================
-def get_youtube_links(classification: str, user_message: str) -> list:
+# ======================= دالة تنسيق روابط اليوتيوب الموحدة =======================
+def format_youtube_message(youtube_links):
+    """تنسيق قائمة روابط اليوتيوب إلى رسالة نصية منسقة."""
+    if not youtube_links:
+        return None
+    msg = "🎥 **شروحات بالفيديو:**\n\n"
+    for i, link in enumerate(youtube_links, 1):
+        title = link.get('title', 'شرح')
+        primary = link.get('primary', '')
+        secondary = link.get('secondary', [])
+        msg += f"{i}. **{title}**\n"
+        msg += f"   🔗 {primary}\n"
+        if secondary:
+            for j, sec in enumerate(secondary, 1):
+                msg += f"      - رابط إضافي {j}: {sec}\n"
+        msg += "\n"
+    return msg
+
+# ======================= دالة استرجاع روابط اليوتيوب المحسنة =======================
+def get_youtube_links(classification: str, user_message: str = "") -> list:
     """
-    ترجع قائمة من روابط اليوتيوب المناسبة حسب التصنيف أو حسب الكلمات المفتاحية.
-    يمكن أن ترجع رابطاً واحداً أو عدة روابط (مثل حالة الإفراغ).
+    ترجع قائمة من روابط اليوتيوب المناسبة حسب التصنيف، مع دعم الكلمات المفتاحية كفولباك.
     """
     results = []
     
-    # ====== التحقق من أن classification ليست None ======
     if classification is None:
         classification = ""
-    
-    # ====== التحقق من أن user_message ليست None ======
     if user_message is None:
         user_message = ""
     
-    # ====== حالة خاصة: الإفراغ ======
-    if "افراغ" in user_message or "إفراغ" in user_message or "نقل ملكية" in user_message:
-        if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
-            results.append(YOUTUBE_LINKS["إفراغ عقاري (بورصة)"])
-        if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
-            results.append(YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"])
-        return results
+    # تطبيع النص للبحث
+    normalized_msg = normalize_arabic(user_message)
     
-    # 1. محاولة المطابقة بالتصنيف (مطابقة دقيقة)
+    # 1. مطابقة دقيقة بالتصنيف
     if classification in YOUTUBE_LINKS:
         results.append(YOUTUBE_LINKS[classification])
     
-    # 2. محاولة المطابقة الجزئية للتصنيف
+    # 2. مطابقة جزئية بالتصنيف
     for key in YOUTUBE_LINKS.keys():
         if key in classification or classification in key:
             if YOUTUBE_LINKS[key] not in results:
                 results.append(YOUTUBE_LINKS[key])
     
-    # 4. محاولة المطابقة بالكلمات المفتاحية
+    # 3. البحث بالكلمات المفتاحية
     keywords_map = {
         "سجل عقاري": "إفراغ عقاري (سجل عقاري)",
         "السجل العقاري": "إفراغ عقاري (سجل عقاري)",
@@ -525,25 +855,24 @@ def get_youtube_links(classification: str, user_message: str) -> list:
         "وسيط ووسيط": "عقد وساطة بين وسطاء"
     }
     
-    # تطبيع الرسالة (إزالة التشكيل والهمزات) للمقارنة بشكل أفضل
-    normalized_message = user_message.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ة", "ه")
-    
+    # تطبيع الكلمات المفتاحية
     for key, category in keywords_map.items():
-        key_normalized = key.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ة", "ه")
-        if key in user_message or key_normalized in normalized_message:
+        key_norm = normalize_arabic(key)
+        if key in user_message or key_norm in normalized_msg:
             if category in YOUTUBE_LINKS:
                 if YOUTUBE_LINKS[category] not in results:
                     results.append(YOUTUBE_LINKS[category])
     
-    # إزالة التكرارات (الحفاظ على الترتيب)
+    # إزالة التكرارات مع الحفاظ على الترتيب
     unique_results = []
     for item in results:
         if item not in unique_results:
             unique_results.append(item)
     
+    # إذا كانت النتائج فارغة، نعيد قائمة فارغة
     return unique_results
 
-# ======================= البرومبت المختصر الجديد (مع عناوين واضحة وتحديد مصطلح المزاد) =======================
+# ======================= البرومبت المختصر (نفسه مع إضافة تفضيلات المستخدم) =======================
 BASE_SYSTEM_PROMPT = """
 أنت **خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 
@@ -629,13 +958,16 @@ def is_api_error(response_text: str) -> bool:
     ]
     return any(indicator.lower() in response_text.lower() for indicator in error_indicators)
 
-# ======================= التصنيف (محسن) =======================
+# ======================= التصنيف المحسن =======================
 def classify_question(user_message: str) -> str:
+    # تطبيع النص وتصحيح الإملاء
+    corrected = correct_spelling(user_message)
+    normalized = normalize_arabic(corrected)
     try:
         response = client_groq.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role": "system", "content": """صنف هذا السؤال العقاري إلى واحدة من هذه الفئات فقط:
+                {"role": "system", "content": """أنت خبير تصنيف أسئلة عقارية. صنف السؤال إلى واحدة من هذه الفئات فقط:
 - 'عقد وساطة': عن عقود الوساطة (مثل: عقد وساطة، وساطة عقارية، عمولة وساطة)
 - 'عقد وساطة مع مستثمر': عن وساطة مع مستثمر أو مشتري أو مستأجر
 - 'عقد وساطة بين وسطاء': عن وساطة بين وسيط ووسيط
@@ -652,15 +984,14 @@ def classify_question(user_message: str) -> str:
 - 'طلب توضيح': يطلب شرحاً لرد سابق
 - 'سؤال عام': لأي سؤال عقاري آخر
 
-**تنبيه هام:** 
-- إذا كان السؤال يحتوي على كلمة "تسجيل" أو "عيني" أو "سجل عقاري"، فصنفه كـ 'تسجيل عيني'.
-- إذا كان السؤال يحتوي على كلمة "افراغ" أو "إفراغ" أو "بورصة" فقط (بدون ذكر "سجل عقاري")، فصنفه كـ 'إفراغ عقاري'.
-- إذا كان السؤال يحتوي على "افراغ" و "سجل عقاري" معاً، فصنفه كـ 'إفراغ بالسجل العقاري'.
-- إذا كان السؤال يحتوي على "وساطة" أو "عقد وساطة"، فصنفه كـ 'عقد وساطة'.
-- إذا كان السؤال يحتوي على "مزاد" أو "ترخيص مزاد"، فصنفه كـ 'ترخيص مزاد عقاري'.
+أمثلة:
+- سؤال: "كيف افرغ عقار عبر البورصة؟" → إفراغ عقاري
+- سؤال: "ما هي خطوات التسجيل العيني؟" → تسجيل عيني
+- سؤال: "عقد وساطة مع مستثمر" → عقد وساطة مع مستثمر
+- سؤال: "ماذا أفعل إذا تأخر المستأجر؟" → مطالبة إيجار متأخر
 
-أجب فقط باسم الفئة."""},
-                {"role": "user", "content": user_message}
+أجب فقط باسم الفئة بدون أي إضافات."""},
+                {"role": "user", "content": normalized}
             ],
             temperature=0.1,
             max_tokens=30
@@ -670,11 +1001,32 @@ def classify_question(user_message: str) -> str:
         return classification
     except Exception as e:
         logger.warning(f"⚠️ فشل التصنيف: {e}")
+        # فولباك: استخدام الكلمات المفتاحية
+        if "افراغ" in normalized or "إفراغ" in normalized:
+            if "سجل عقاري" in normalized:
+                return "إفراغ بالسجل العقاري"
+            return "إفراغ عقاري"
+        if "تسجيل" in normalized or "عيني" in normalized:
+            return "تسجيل عيني"
+        if "وساطة" in normalized or "عقد وساطة" in normalized:
+            return "عقد وساطة"
+        if "إيجار سكني" in normalized or "ايجار سكني" in normalized:
+            return "عقد إيجار سكني"
+        if "إيجار تجاري" in normalized or "ايجار تجاري" in normalized:
+            return "عقد إيجار تجاري"
+        if "مزاد" in normalized:
+            return "ترخيص مزاد عقاري"
+        if "مطالبة" in normalized or "إخلاء" in normalized or "فسخ" in normalized:
+            return "مطالبة إيجار متأخر"
+        if "عربون" in normalized:
+            return "دفع العربون"
+        if "إنهاء عقد" in normalized or "انهاء عقد" in normalized:
+            return "إنهاء عقد إيجار"
         return "سؤال عام"
 
-# ======================= توليد الرد المختصر =======================
-def get_ai_summary_response(user_message: str) -> str:
-    """توليد الرد المختصر الشامل فقط."""
+# ======================= توليد الرد المختصر مع دمج تفضيلات المستخدم =======================
+def get_ai_summary_response(user_message: str, user_id: int = None) -> str:
+    """توليد الرد المختصر الشامل فقط مع دمج تفضيلات المستخدم إن وجدت."""
     # التحقق من الأسئلة غير العقارية
     non_real_estate_keywords = [
         "قصة", "تاريخ", "ذو القرنين", "ديني", "ثقافي", "أدبي", "شعر", "رواية",
@@ -689,8 +1041,14 @@ def get_ai_summary_response(user_message: str) -> str:
     active_rule = get_active_rule()
     base_prompt = active_rule if active_rule else BASE_SYSTEM_PROMPT
 
-    # نضيف تعليمات إضافية لضمان البحث الفعلي في المصادر
-    enhanced_prompt = base_prompt + """
+    # إضافة تفضيلات المستخدم إن وجدت
+    preferences = ""
+    if user_id:
+        prefs = get_user_preferences(user_id)
+        if prefs:
+            preferences = f"\n\n**تفضيلات المستخدم:** المدينة: {prefs['city'] or 'غير محدد'}, نوع العقار: {prefs['property_type'] or 'غير محدد'}, النطاق السعري: {prefs['price_range'] or 'غير محدد'}.\nيمكنك تخصيص الرد بناءً على هذه التفضيلات إذا كانت ذات صلة."
+
+    enhanced_prompt = base_prompt + preferences + """
 
 🔴 **تذكير إضافي:** 
 - المصادر الـ16 هي مرجعك الوحيد.
@@ -741,7 +1099,7 @@ def get_ai_summary_response(user_message: str) -> str:
 
     return "❌ عذراً، جميع خدمات الذكاء الاصطناعي غير متاحة حالياً. يرجى المحاولة لاحقاً."
 
-# ======================= توليد الأقسام التفصيلية =======================
+# ======================= توليد الأقسام التفصيلية (نفسها) =======================
 def get_section_response(user_message: str, section: str) -> str:
     """توليد رد تفصيلي لقسم معين (المصادر، المتطلبات، الشروط، الخطوات، الإجراءات التنظيمية)."""
     section_prompts = {
@@ -816,11 +1174,17 @@ def get_section_response(user_message: str, section: str) -> str:
 
     return f"❌ عذراً، لم أتمكن من استرجاع تفاصيل '{section}'. يرجى المحاولة لاحقاً، أو تحديث السؤال."
 
-# ======================= دوال التأكيد بالرقم السري =======================
+# ======================= دوال التأكيد بالرقم السري (محدثة لتخزين قاعدة البيانات) =======================
 pending_secret_requests = {}
 
 async def request_secret_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str, data: dict):
     user_id = update.effective_user.id
+    secret = get_admin_secret(user_id)
+    if not secret:
+        await update.message.reply_text("❌ ليس لديك صلاحية كمدير.")
+        return
+    # حفظ الطلب في قاعدة البيانات
+    save_pending_action(user_id, action, json.dumps(data), secret)
     pending_secret_requests[user_id] = {
         "action": action,
         "data": data,
@@ -855,24 +1219,33 @@ async def handle_secret_confirmation(update: Update, context: ContextTypes.DEFAU
         action = pending["action"]
         data = pending["data"]
         del pending_secret_requests[user_id]
+        # حذف الطلب من قاعدة البيانات
+        pending_record = get_pending_action(user_id)
+        if pending_record:
+            delete_pending_action(pending_record["id"])
 
         if action == "set_rule":
             new_rule = data["rule_text"]
             delete_setting("custom_rule")
             add_custom_rule("active_rule", new_rule, user_id)
             activate_rule("active_rule")
+            log_audit(user_id, "set_rule", f"تم تحديث القاعدة بـ: {new_rule[:50]}...")
             await update.message.reply_text("✅ تم تحديث القاعدة بنجاح!")
         elif action == "add_rule":
             add_custom_rule(data["rule_name"], data["rule_text"], user_id)
+            log_audit(user_id, "add_rule", f"تم إضافة قاعدة: {data['rule_name']}")
             await update.message.reply_text(f"✅ تم إضافة القاعدة '{data['rule_name']}'.")
         elif action == "edit_rule":
             update_custom_rule(data["rule_name"], data["new_text"])
+            log_audit(user_id, "edit_rule", f"تم تعديل قاعدة: {data['rule_name']}")
             await update.message.reply_text(f"✅ تم تعديل القاعدة '{data['rule_name']}'.")
         elif action == "delete_rule":
             delete_custom_rule(data["rule_name"])
+            log_audit(user_id, "delete_rule", f"تم حذف قاعدة: {data['rule_name']}")
             await update.message.reply_text(f"✅ تم حذف القاعدة '{data['rule_name']}'.")
         elif action == "clear_all_rules":
             delete_all_custom_rules()
+            log_audit(user_id, "clear_all_rules", "تم حذف جميع القواعد المخصصة")
             await update.message.reply_text("✅ تم حذف جميع القواعد المخصصة.")
         else:
             await update.message.reply_text("❌ إجراء غير معروف.")
@@ -888,11 +1261,12 @@ async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("❗ استخدم: /addadmin @username الرمز_السري")
+        await update.message.reply_text("❗ استخدم: /addadmin @username الرمز_السري [role]")
         return
 
     username = args[0].replace("@", "")
     secret = args[1]
+    role = args[2] if len(args) > 2 else "admin"
 
     try:
         user_obj = await context.bot.get_chat(username)
@@ -901,13 +1275,17 @@ async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ لم أجد هذا المستخدم.")
         return
 
+    # تشفير الرقم السري
+    hashed_secret = hashlib.sha256(secret.encode()).hexdigest()
+
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO admins (user_id, username, secret_code, added_by, added_date)
-                 VALUES (?, ?, ?, ?, ?)''', (user_id, username, secret, user.id, datetime.now().isoformat()))
+    c.execute('''INSERT OR REPLACE INTO admins (user_id, username, secret_code, added_by, added_date, role)
+                 VALUES (?, ?, ?, ?, ?, ?)''', (user_id, username, hashed_secret, user.id, datetime.now().isoformat(), role))
     conn.commit()
     conn.close()
 
+    log_audit(user.id, "add_admin", f"تم إضافة {username} كمدير")
     await update.message.reply_text(f"✅ تم إضافة {username} كمدير بنجاح!")
 
 async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -931,13 +1309,15 @@ async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
     conn.close()
 
     if deleted:
+        log_audit(user.id, "remove_admin", f"تم حذف {username} من المدراء")
         await update.message.reply_text(f"✅ تم حذف {username} من قائمة المدراء.")
     else:
         await update.message.reply_text(f"❌ لم أجد {username} في قائمة المدراء.")
 
 async def admins_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, _ = is_admin(user.id)
+    if not is_adm and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
 
@@ -948,9 +1328,40 @@ async def admins_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     msg = "📋 **قائمة المدراء:**\n\n"
     for a in admins:
-        msg += f"- @{a[1]} (رمز: {a[2]})\n"
+        role = a[5] if len(a) > 5 else "admin"
+        msg += f"- @{a[1]} (دور: {role})\n"
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
+async def set_admin_role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ هذا الأمر للمسؤول الأساسي فقط.")
+        return
+
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text("❗ استخدم: /setadminrole @username role (admin/super_admin/moderator)")
+        return
+
+    username = args[0].replace("@", "")
+    role = args[1]
+
+    if role not in ["admin", "super_admin", "moderator"]:
+        await update.message.reply_text("❌ دور غير صالح. الأدوار المتاحة: admin, super_admin, moderator")
+        return
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("UPDATE admins SET role = ? WHERE username = ?", (role, username))
+    conn.commit()
+    if c.rowcount == 0:
+        await update.message.reply_text(f"❌ لم أجد {username} في قائمة المدراء.")
+    else:
+        log_audit(user.id, "set_admin_role", f"تم تغيير دور {username} إلى {role}")
+        await update.message.reply_text(f"✅ تم تغيير دور {username} إلى {role}.")
+    conn.close()
+
+# ======================= أوامر القواعد =======================
 async def set_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != ADMIN_ID:
@@ -973,9 +1384,9 @@ async def clear_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     delete_setting("custom_rule")
     delete_all_custom_rules()
+    log_audit(user.id, "clear_rule", "تم إلغاء القاعدة المخصصة")
     await update.message.reply_text("✅ تم إلغاء القاعدة المخصصة، والعودة إلى القاعدة الافتراضية.")
 
-# ======================= أوامر القواعد المتعددة =======================
 async def add_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != ADMIN_ID:
@@ -993,7 +1404,8 @@ async def add_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def list_rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, _ = is_admin(user.id)
+    if not is_adm and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
 
@@ -1010,7 +1422,8 @@ async def list_rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def show_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, _ = is_admin(user.id)
+    if not is_adm and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
 
@@ -1044,6 +1457,7 @@ async def activate_rule_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     activate_rule(rule_name)
+    log_audit(user.id, "activate_rule", f"تم تفعيل قاعدة: {rule_name}")
     await update.message.reply_text(f"✅ تم تفعيل القاعدة '{rule_name}' بنجاح.")
 
 async def edit_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1091,12 +1505,72 @@ async def clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_
 
     await request_secret_confirmation(update, context, "clear_all_rules", {})
 
-# ======================= بناء لوحة المفاتيح التفاعلية =======================
-def get_main_keyboard(has_youtube: bool = False):
-    """إرجاع لوحة المفاتيح بالترتيب: زر اليوتيوب (إن وجد) ثم صفوف متجانسة (زرين) ثم الأزرار السفلية."""
+# ======================= أوامر المستخدم الجديدة =======================
+async def saved_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    saved = get_saved_responses(user.id)
+    if not saved:
+        await update.message.reply_text("ليس لديك أي ردود محفوظة.")
+        return
+    msg = "📚 **الردود المحفوظة:**\n\n"
+    for s in saved[:10]:
+        msg += f"*{s[1]}*\n{ s[2][:100]}...\n\n"
+    if len(saved) > 10:
+        msg += f"... و {len(saved)-10} ردود أخرى."
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def save_response_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    # حفظ آخر رد في السياق
+    context_data = get_context(user.id)
+    if not context_data:
+        await update.message.reply_text("لا يوجد رد لحفظه. اسأل سؤالاً أولاً.")
+        return
+    last_q = context_data.get("last_question")
+    last_a = context_data.get("last_suggestion")
+    if not last_q or not last_a:
+        await update.message.reply_text("لا يوجد رد لحفظه.")
+        return
+    save_saved_response(user.id, last_q, last_a)
+    await update.message.reply_text("✅ تم حفظ الرد للرجوع إليه لاحقاً. استخدم /saved لعرض المحفوظات.")
+
+async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    args = context.args
+    if len(args) < 3:
+        await update.message.reply_text("❗ استخدم: /preferences المدينة نوع_العقار النطاق_السعري\nمثال: /preferences الرياض سكني 500-1000")
+        return
+    city = args[0]
+    property_type = args[1]
+    price_range = " ".join(args[2:])
+    set_user_preference(user.id, city, property_type, price_range)
+    await update.message.reply_text("✅ تم حفظ تفضيلاتك بنجاح.")
+
+async def audit_log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    is_adm, role = is_admin(user.id)
+    if not is_adm or role not in ["super_admin", "admin"]:
+        await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
+        return
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT user_id, action, details, timestamp FROM audit_log ORDER BY timestamp DESC LIMIT 20")
+    rows = c.fetchall()
+    conn.close()
+    if not rows:
+        await update.message.reply_text("لا يوجد سجل للعمليات.")
+        return
+    msg = "📋 **سجل العمليات الإدارية (آخر 20):**\n\n"
+    for r in rows:
+        msg += f"- [{r[3]}] {r[1]}: {r[2]}\n"
+    await update.message.reply_text(msg)
+
+# ======================= بناء لوحة المفاتيح التفاعلية (محدثة) =======================
+def get_main_keyboard(has_youtube: bool = False, has_save: bool = False):
+    """إرجاع لوحة المفاتيح مع إضافة أزرار جديدة."""
     keyboard = []
     
-    # زر اليوتيوب (يظهر فقط إذا كان هناك رابط مناسب)
+    # زر اليوتيوب
     if has_youtube:
         keyboard.append([InlineKeyboardButton("🎥 شرح باليوتيوب", callback_data="show_youtube")])
     
@@ -1108,6 +1582,11 @@ def get_main_keyboard(has_youtube: bool = False):
     keyboard.append([InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps"),
                      InlineKeyboardButton("🛠️ الإجراءات التنظيمية", callback_data="detail_procedures")])
     
+    # أزرار إضافية (عرض الكل، حفظ)
+    keyboard.append([InlineKeyboardButton("📑 عرض الكل", callback_data="show_all")])
+    if has_save:
+        keyboard.append([InlineKeyboardButton("💾 حفظ الرد", callback_data="save_response")])
+    
     # الأزرار السفلية
     keyboard.append([InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")])
     keyboard.append([InlineKeyboardButton("❓ هل هذه الإجابة مفيدة؟", callback_data="dummy_feedback")])
@@ -1116,7 +1595,7 @@ def get_main_keyboard(has_youtube: bool = False):
     
     return InlineKeyboardMarkup(keyboard)
 
-# ======================= معالج الأزرار =======================
+# ======================= معالج الأزرار المحدث =======================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1127,177 +1606,83 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_q = context_data.get("last_question") if context_data else None
     last_summary = context_data.get("last_suggestion") if context_data else None
     classification = context_data.get("classification") if context_data else None
+    youtube_links = context_data.get("youtube_links") if context_data else []
 
     # ====== زر "شرح باليوتيوب" ======
     if data == "show_youtube":
-        import json
-        
-        # ====== التحقق من أن last_q ليس None ======
         if last_q is None:
             last_q = ""
         
-        # ========================================================
-        # التعديل الجذري: استخدام الروابط المخزنة أولاً
-        # ========================================================
-        youtube_links = []
+        # استرجاع الروابط المخزنة أولاً
+        links = youtube_links if isinstance(youtube_links, list) else []
         
-        # 1. محاولة استرجاع الروابط المخزنة في السياق
-        stored_links_str = context_data.get("youtube_links") if context_data else ""
-        if stored_links_str:
-            try:
-                youtube_links = json.loads(stored_links_str)
-                logger.info(f"✅ تم استرجاع روابط مخزنة: {len(youtube_links)} رابط")
-            except json.JSONDecodeError:
-                logger.warning("⚠️ فشل تحليل الروابط المخزنة، سيتم إعادة الحساب")
-                youtube_links = []
+        # إذا كانت الروابط المخزنة فارغة، نحاول إعادة الحساب كفولباك
+        if not links and last_q:
+            links = get_youtube_links(classification, last_q)
         
-        # 2. إذا لم توجد روابط مخزنة، نلجأ إلى إعادة الحساب (احتياطي)
-        if not youtube_links and last_q:
-            logger.info("🔄 إعادة حساب الروابط (احتياطي)")
-            # 2.1 حالة الإفراغ (تعرض كلا النوعين)
-            if "افراغ" in last_q or "إفراغ" in last_q or "نقل ملكية" in last_q:
-                if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["إفراغ عقاري (بورصة)"])
-                if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"])
-            
-            # 2.2 حالة التسجيل العيني
-            elif "تسجيل عيني" in last_q or "تسجيل العقار" in last_q or "عينيا" in last_q:
-                if "تسجيل عيني" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["تسجيل عيني"])
-            
-            # 2.3 حالة عقود الوساطة
-            elif "وساطة" in last_q or "عقد وساطة" in last_q:
-                if "وسيط ووسيط" in last_q or "بين وسيط" in last_q:
-                    if "عقد وساطة بين وسطاء" in YOUTUBE_LINKS:
-                        youtube_links.append(YOUTUBE_LINKS["عقد وساطة بين وسطاء"])
-                elif "مستثمر" in last_q or "مشتري" in last_q or "مستأجر" in last_q:
-                    if "عقد وساطة مع مستثمر" in YOUTUBE_LINKS:
-                        youtube_links.append(YOUTUBE_LINKS["عقد وساطة مع مستثمر"])
-                else:
-                    if "عقد وساطة" in YOUTUBE_LINKS:
-                        youtube_links.append(YOUTUBE_LINKS["عقد وساطة"])
-            
-            # 2.4 حالة عقد إيجار سكني
-            elif "إيجار سكني" in last_q or "ايجار سكني" in last_q:
-                if "عقد إيجار سكني" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["عقد إيجار سكني"])
-            
-            # 2.5 حالة عقد إيجار تجاري
-            elif "إيجار تجاري" in last_q or "ايجار تجاري" in last_q:
-                if "عقد إيجار تجاري" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["عقد إيجار تجاري"])
-            
-            # 2.6 حالة مزاد
-            elif "مزاد" in last_q or "ترخيص مزاد" in last_q:
-                if "ترخيص مزاد عقاري" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["ترخيص مزاد عقاري"])
-            
-            # 2.7 حالة مطالبة
-            elif "مطالبة" in last_q or "إخلاء" in last_q or "فسخ" in last_q:
-                if "مطالبة إيجار متأخر" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["مطالبة إيجار متأخر"])
-            
-            # 2.8 حالة عربون
-            elif "عربون" in last_q:
-                if "دفع العربون" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["دفع العربون"])
-            
-            # 2.9 حالة إنهاء عقد
-            elif "إنهاء عقد" in last_q or "انهاء عقد" in last_q:
-                if "إنهاء عقد إيجار" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["إنهاء عقد إيجار"])
-            
-            # 2.10 إذا لم يتم العثور على شيء، استخدام التصنيف كاحتياطي
-            if not youtube_links and classification:
-                youtube_links = get_youtube_links(classification, last_q)
-        
-        # عرض النتائج
-        if youtube_links:
-            msg = "🎥 **شروحات بالفيديو:**\n\n"
-            for i, link in enumerate(youtube_links, 1):
-                msg += f"{i}. **{link.get('title', 'شرح')}**\n"
-                msg += f"   🔗 {link['primary']}\n"
-                if link.get('secondary'):
-                    for j, sec_link in enumerate(link['secondary'], 1):
-                        msg += f"      - رابط إضافي {j}: {sec_link}\n"
-                msg += "\n"
-            
-            if FOOTER.strip() not in msg:
+        if links:
+            msg = format_youtube_message(links)
+            if msg:
                 msg += FOOTER
-            await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=True))
+                await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=True))
+            else:
+                await query.edit_message_text("❌ لم أجد شرحاً بالفيديو لهذا الموضوع حالياً.", reply_markup=get_main_keyboard())
         else:
             await query.edit_message_text("❌ لم أجد شرحاً بالفيديو لهذا الموضوع حالياً.", reply_markup=get_main_keyboard())
 
     # ====== زر "الرد المختصر" ======
     elif data == "show_summary":
         if last_summary:
-            # التحقق من وجود روابط يوتيوب
-            youtube_links = get_youtube_links(classification, last_q)
-            has_youtube = len(youtube_links) > 0
+            has_youtube = len(youtube_links) > 0 if isinstance(youtube_links, list) else False
             await query.edit_message_text(last_summary, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد رداً مختصراً سابقاً. اطرح سؤالاً جديداً.")
 
+    # ====== عرض الكل ======
+    elif data == "show_all":
+        if last_q:
+            sections = ["source", "requirements", "conditions", "steps", "procedures"]
+            all_replies = []
+            for sec in sections:
+                reply = get_section_response(last_q, sec)
+                all_replies.append(f"**{sec.upper()}**\n{reply}")
+            combined = "\n\n---\n\n".join(all_replies)
+            combined += FOOTER
+            has_youtube = len(youtube_links) > 0 if isinstance(youtube_links, list) else False
+            await query.edit_message_text(combined, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
+        else:
+            await query.edit_message_text("لم أجد سؤالاً سابقاً.")
+
+    # ====== حفظ الرد ======
+    elif data == "save_response":
+        if last_q and last_summary:
+            save_saved_response(user_id, last_q, last_summary)
+            await query.edit_message_text("✅ تم حفظ الرد بنجاح.", reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("لا يوجد رد لحفظه.")
+
     # ====== أزرار التفاصيل (5 أقسام) ======
-    elif data == "detail_source":
-        if last_q:
-            reply = get_section_response(last_q, "source")
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            youtube_links = get_youtube_links(classification, last_q)
-            has_youtube = len(youtube_links) > 0
+    elif data in ["detail_source", "detail_requirements", "detail_conditions", "detail_steps", "detail_procedures"]:
+        section_map = {
+            "detail_source": "source",
+            "detail_requirements": "requirements",
+            "detail_conditions": "conditions",
+            "detail_steps": "steps",
+            "detail_procedures": "procedures"
+        }
+        section = section_map.get(data)
+        if last_q and section:
+            reply = get_section_response(last_q, section)
+            reply += FOOTER
+            has_youtube = len(youtube_links) > 0 if isinstance(youtube_links, list) else False
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
-            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
-
-    elif data == "detail_requirements":
-        if last_q:
-            reply = get_section_response(last_q, "requirements")
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            youtube_links = get_youtube_links(classification, last_q)
-            has_youtube = len(youtube_links) > 0
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
-        else:
-            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
-
-    elif data == "detail_conditions":
-        if last_q:
-            reply = get_section_response(last_q, "conditions")
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            youtube_links = get_youtube_links(classification, last_q)
-            has_youtube = len(youtube_links) > 0
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
-        else:
-            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
-
-    elif data == "detail_steps":
-        if last_q:
-            reply = get_section_response(last_q, "steps")
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            youtube_links = get_youtube_links(classification, last_q)
-            has_youtube = len(youtube_links) > 0
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
-        else:
-            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
-
-    elif data == "detail_procedures":
-        if last_q:
-            reply = get_section_response(last_q, "procedures")
-            if FOOTER.strip() not in reply.strip():
-                reply = reply + FOOTER
-            youtube_links = get_youtube_links(classification, last_q)
-            has_youtube = len(youtube_links) > 0
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
-        else:
-            await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
+            await query.edit_message_text("لم أجد سؤالاً سابقاً.")
 
     # ====== زر "سؤال عقاري آخر" ======
     elif data == "ask_another":
         clear_context(user_id)
+        end_session(get_session_id(user_id))
         await context.bot.send_message(
             chat_id=user_id,
             text="تفضل طال عمرك.. هل لديك سؤال عقاري آخر؟",
@@ -1309,7 +1694,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.edit_message_reply_markup(reply_markup=None)
 
-    # ====== زر وهمي (لا يؤدي إلى شيء) ======
+    # ====== زر وهمي ======
     elif data == "dummy_feedback":
         pass
 
@@ -1340,41 +1725,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
         await query.edit_message_text(zones_msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
-    # ====== أزرار التقييم (نعم / لا) ======
+    # ====== أزرار التقييم ======
     elif data == "feedback_yes":
-        context_data = get_context(user_id)
-        last_q = context_data.get("last_question") if context_data else None
-        if last_q:
-            answer = context_data.get("last_suggestion") if context_data else None
-            if answer:
-                save_cached_answer(last_q, answer, "المصادر الرسمية")
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
-                    [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
-                    [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
-                ])
-            )
-            clear_context(user_id)
-            await query.edit_message_reply_markup(reply_markup=None)
+        if last_q and last_summary:
+            save_cached_answer(last_q, last_summary, "المصادر الرسمية")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
+                [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
+                [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
+            ])
+        )
+        clear_context(user_id)
+        await query.edit_message_reply_markup(reply_markup=None)
 
     elif data == "feedback_no":
-        context_data = get_context(user_id)
-        last_q = context_data.get("last_question") if context_data else None
-        if last_q:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="شكراً لمشاركتك.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
-                    [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
-                    [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
-                ])
-            )
-            clear_context(user_id)
-            await query.edit_message_reply_markup(reply_markup=None)
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="شكراً لمشاركتك.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗺️ النطاقات الجغرافية", callback_data="zones")],
+                [InlineKeyboardButton("📌 المرجع الرئيسي", url="https://saudiproperties.rega.gov.sa")],
+                [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
+            ])
+        )
+        clear_context(user_id)
+        await query.edit_message_reply_markup(reply_markup=None)
 
     # ====== أزرار التوضيح القديمة ======
     elif data in ["clarify_conditions", "clarify_requirements", "clarify_steps", "clarify_all", "clarify_other", "confirm_yes", "confirm_no"]:
@@ -1388,6 +1766,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user.id, user.username, user.first_name)
+    get_session_id(user.id)  # إنشاء جلسة جديدة
 
     stats = get_stats()
 
@@ -1423,11 +1802,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     user_message = update.message.text.strip()
 
+    # معالجة تأكيد الرقم السري
     if user_id in pending_secret_requests:
         await handle_secret_confirmation(update, context)
         return
 
     save_user(user_id, user.username, user.first_name)
+    get_session_id(user_id)  # تحديث الجلسة
 
     last_activity = get_last_activity(user_id)
     show_header = False
@@ -1445,40 +1826,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keywords = [word for word in user_message.split() if len(word) > 2]
     save_keywords(keywords)
 
-    # ====== التحقق من ذاكرة التخزين المؤقت ======
-    cached_answer = get_cached_answer(user_message)
-    if cached_answer:
-        logger.info(f"✅ إجابة مخزنة لـ: {user_message}")
-        await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+    # تصحيح إملائي وتطبيع
+    corrected = correct_spelling(user_message)
+    normalized = normalize_arabic(corrected)
+
+    # ====== التحقق من FAQ أولاً ======
+    faq_answer = get_faq_answer(normalized)
+    if faq_answer:
+        logger.info(f"✅ تم الاسترجاع من FAQ لـ: {user_message}")
+        await update.message.reply_text(faq_answer, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
         return
 
-    # ====== مرشح الكلمات المفتاحية قبل التصنيف ======
+    # ====== التحقق من ذاكرة التخزين المؤقت (دلالياً) ======
+    cached = get_semantic_cached_answer(user_message)
+    if cached:
+        logger.info(f"✅ تم الاسترجاع من التخزين المؤقت الدلالي لـ: {user_message}")
+        await update.message.reply_text(cached, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        return
+
+    # ====== مرشح الكلمات المفتاحية ======
     keyword_classification = None
-    if "افراغ" in user_message or "إفراغ" in user_message:
-        if "سجل عقاري" in user_message or "السجل العقاري" in user_message:
+    if "افراغ" in normalized or "إفراغ" in normalized:
+        if "سجل عقاري" in normalized:
             keyword_classification = "إفراغ بالسجل العقاري"
         else:
             keyword_classification = "إفراغ عقاري"
-    elif "تسجيل عيني" in user_message or "تسجيل العقار" in user_message or "تسجيل عقار" in user_message or "عينيا" in user_message:
+    elif "تسجيل عيني" in normalized or "تسجيل العقار" in normalized or "تسجيل عقار" in normalized or "عينيا" in normalized:
         keyword_classification = "تسجيل عيني"
-    elif "عقد وساطة" in user_message or "وساطة" in user_message or "وسيط" in user_message:
-        if "بين وسيط" in user_message or "وسيط ووسيط" in user_message:
+    elif "وساطة" in normalized or "عقد وساطة" in normalized:
+        if "بين وسيط" in normalized or "وسيط ووسيط" in normalized:
             keyword_classification = "عقد وساطة بين وسطاء"
-        elif "مستثمر" in user_message or "مشتري" in user_message or "مستأجر" in user_message:
+        elif "مستثمر" in normalized or "مشتري" in normalized or "مستأجر" in normalized:
             keyword_classification = "عقد وساطة مع مستثمر"
         else:
             keyword_classification = "عقد وساطة"
-    elif "إيجار سكني" in user_message or "ايجار سكني" in user_message:
+    elif "إيجار سكني" in normalized or "ايجار سكني" in normalized:
         keyword_classification = "عقد إيجار سكني"
-    elif "إيجار تجاري" in user_message or "ايجار تجاري" in user_message:
+    elif "إيجار تجاري" in normalized or "ايجار تجاري" in normalized:
         keyword_classification = "عقد إيجار تجاري"
-    elif "مزاد" in user_message or "ترخيص مزاد" in user_message:
+    elif "مزاد" in normalized:
         keyword_classification = "ترخيص مزاد عقاري"
-    elif "مطالبة" in user_message or "إخلاء" in user_message or "فسخ" in user_message:
+    elif "مطالبة" in normalized or "إخلاء" in normalized or "فسخ" in normalized:
         keyword_classification = "مطالبة إيجار متأخر"
-    elif "عربون" in user_message:
+    elif "عربون" in normalized:
         keyword_classification = "دفع العربون"
-    elif "إنهاء عقد" in user_message or "انهاء عقد" in user_message or "إنهاء الإيجار" in user_message:
+    elif "إنهاء عقد" in normalized or "انهاء عقد" in normalized or "إنهاء الإيجار" in normalized:
         keyword_classification = "إنهاء عقد إيجار"
 
     # ====== التصنيف ======
@@ -1489,17 +1881,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         classification = classify_question(user_message)
         logger.info(f"📊 التصنيف (من النموذج): {classification}")
 
-    # ====== البحث عن روابط اليوتيوب المناسبة ======
+    # ====== البحث عن روابط اليوتيوب ======
     youtube_links = get_youtube_links(classification, user_message)
     has_youtube = len(youtube_links) > 0
-    import json
-    youtube_links_str = json.dumps(youtube_links, ensure_ascii=False) if youtube_links else ""
 
     # ====== توليد الرد المختصر ======
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         
-        reply = get_ai_summary_response(user_message)
+        reply = get_ai_summary_response(user_message, user_id)
 
         is_apology = "أنا مختص بالشأن العقاري السعودي فقط" in reply
         if is_apology:
@@ -1510,8 +1900,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if FOOTER.strip() not in reply.strip():
             reply = reply + FOOTER
 
-        # حفظ السياق (السؤال الأصلي، الرد المختصر، التصنيف، روابط اليوتيوب)
-        save_context(user_id, user_message, reply, "menu", classification, youtube_links_str)
+        # حفظ السياق (مع الروابط)
+        save_context(user_id, user_message, reply, "menu", classification, youtube_links)
 
         if show_header:
             stats = get_stats()
@@ -1521,9 +1911,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👥 **عدد المستخدمين الحالي:** {stats['total_users']}
 📊 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d')}
 """
-            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
+            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True))
         else:
-            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
+            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True))
 
     except Exception as e:
         logger.error(f"❌ خطأ في handle_message: {e}")
@@ -1532,7 +1922,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================= أوامر الإحصائيات =======================
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, _ = is_admin(user.id)
+    if not is_adm and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     stats = get_stats()
@@ -1554,7 +1945,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, _ = is_admin(user.id)
+    if not is_adm and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     keywords = get_top_keywords(10)
@@ -1566,7 +1958,8 @@ async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, _ = is_admin(user.id)
+    if not is_adm and user.id != ADMIN_ID:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     users = get_all_users()
@@ -1584,7 +1977,8 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, role = is_admin(user.id)
+    if not is_adm or role not in ["super_admin", "admin"]:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     args = context.args
@@ -1606,11 +2000,13 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"فشل إرسال لـ {u[0]}: {e}")
             failed_count += 1
         await asyncio.sleep(0.05)
+    log_audit(user.id, "broadcast", f"تم إرسال إعلان لـ {sent_count} مستخدم")
     await update.message.reply_text(f"✅ تم الإرسال لـ {sent_count} مستخدم.\n❌ فشل لـ {failed_count} مستخدم.")
 
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_admin(user.id) and user.id != ADMIN_ID:
+    is_adm, role = is_admin(user.id)
+    if not is_adm or role not in ["super_admin", "admin"]:
         await update.message.reply_text("⛔ هذا الأمر للمدراء فقط.")
         return
     output = io.StringIO()
@@ -1626,6 +2022,7 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for r in rejections:
         writer.writerow(["رفض", "", "", r[0], "", r[1]])
     output.seek(0)
+    log_audit(user.id, "export", "تم تصدير البيانات")
     await update.message.reply_document(document=io.BytesIO(output.getvalue().encode('utf-8')), filename="bot_export.csv")
 
 # ======================= التشغيل =======================
@@ -1634,9 +2031,12 @@ def main():
     logger.info("✅ قاعدة البيانات جاهزة.")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # أوامر الإدارة
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("addadmin", add_admin_command))
     app.add_handler(CommandHandler("removeadmin", remove_admin_command))
+    app.add_handler(CommandHandler("setadminrole", set_admin_role_command))
+    app.add_handler(CommandHandler("admins", admins_list_command))
     app.add_handler(CommandHandler("rule", set_rule_command))
     app.add_handler(CommandHandler("clearrule", clear_rule_command))
     app.add_handler(CommandHandler("addrule", add_rule_command))
@@ -1646,18 +2046,25 @@ def main():
     app.add_handler(CommandHandler("editrule", edit_rule_command))
     app.add_handler(CommandHandler("deleterule", delete_rule_command))
     app.add_handler(CommandHandler("clearallrules", clear_all_rules_command))
-    app.add_handler(CommandHandler("admins", admins_list_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("top", top_keywords_command))
     app.add_handler(CommandHandler("users", users_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("export", export_command))
+    app.add_handler(CommandHandler("audit", audit_log_command))
+    
+    # أوامر المستخدم الجديدة
+    app.add_handler(CommandHandler("saved", saved_command))
+    app.add_handler(CommandHandler("save", save_response_command))
+    app.add_handler(CommandHandler("preferences", preferences_command))
+    
+    # معالج الأزرار والرسائل
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية + روابط اليوتيوب الموحدة للجميع...")
+    logger.info("✅ البوت العقاري يعمل بالنسخة المطورة (جميع التعديلات) ...")
 
-    # ======================= حل مشكلة Conflict =======================
+    # حل مشكلة Conflict
     async def delete_webhook():
         await app.bot.delete_webhook(drop_pending_updates=True)
         logger.info("✅ Webhook تم حذفه")
