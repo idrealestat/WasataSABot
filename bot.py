@@ -781,20 +781,33 @@ def format_youtube_message(youtube_links):
         msg += "\n"
     return msg
 
-# ======================= دالة استرجاع روابط اليوتيوب المحسنة =======================
+# ======================= دالة استرجاع روابط اليوتيوب المحسنة (مع إعادة شرط الإفراغ) =======================
 def get_youtube_links(classification: str, user_message: str = "") -> list:
     results = []
     if classification is None:
         classification = ""
     if user_message is None:
         user_message = ""
+    
+    # ====== الشرط الخاص بالإفراغ (أُعيد من الكود الأصلي) ======
+    if "افراغ" in user_message or "إفراغ" in user_message or "نقل ملكية" in user_message:
+        if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
+            results.append(YOUTUBE_LINKS["إفراغ عقاري (بورصة)"])
+        if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
+            results.append(YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"])
+        return results
+    
+    # ====== المطابقة بالتصنيف والكلمات المفتاحية ======
     normalized_msg = normalize_arabic(user_message)
+    
     if classification in YOUTUBE_LINKS:
         results.append(YOUTUBE_LINKS[classification])
+    
     for key in YOUTUBE_LINKS.keys():
         if key in classification or classification in key:
             if YOUTUBE_LINKS[key] not in results:
                 results.append(YOUTUBE_LINKS[key])
+    
     keywords_map = {
         "سجل عقاري": "إفراغ عقاري (سجل عقاري)",
         "السجل العقاري": "إفراغ عقاري (سجل عقاري)",
@@ -827,19 +840,22 @@ def get_youtube_links(classification: str, user_message: str = "") -> list:
         "مستأجر": "عقد وساطة مع مستثمر",
         "وسيط ووسيط": "عقد وساطة بين وسطاء"
     }
+    
     for key, category in keywords_map.items():
         key_norm = normalize_arabic(key)
         if key in user_message or key_norm in normalized_msg:
             if category in YOUTUBE_LINKS:
                 if YOUTUBE_LINKS[category] not in results:
                     results.append(YOUTUBE_LINKS[category])
+    
     unique_results = []
     for item in results:
         if item not in unique_results:
             unique_results.append(item)
+    
     return unique_results
 
-# ======================= البرومبت الأساسي (بدون تغيير - Markdown) =======================
+# ======================= البرومبت الأساسي (Markdown) =======================
 BASE_SYSTEM_PROMPT = """
 أنت **خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 
@@ -2043,7 +2059,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بالنسخة النهائية (باستخدام Markdown للتنسيق).")
+    logger.info("✅ البوت العقاري يعمل بالنسخة النهائية (مع إعادة شرط الإفراغ + Markdown للتنسيق).")
 
     async def delete_webhook():
         await app.bot.delete_webhook(drop_pending_updates=True)
