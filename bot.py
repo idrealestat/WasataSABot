@@ -457,27 +457,40 @@ YOUTUBE_LINKS = {
     }
 }
 
-# ======================= دالة استرجاع روابط اليوتيوب (محسنة) =======================
-def get_youtube_links(classification: str, user_message: str) -> dict:
+# ======================= دالة استرجاع روابط اليوتيوب الموحدة (ترجع قائمة) =======================
+def get_youtube_links(classification: str, user_message: str) -> list:
     """
-    ترجع روابط اليوتيوب المناسبة حسب التصنيف أو حسب الكلمات المفتاحية في السؤال.
+    ترجع قائمة من روابط اليوتيوب المناسبة حسب التصنيف أو حسب الكلمات المفتاحية.
+    يمكن أن ترجع رابطاً واحداً أو عدة روابط (مثل حالة الإفراغ).
     """
+    results = []
+    
     # 1. محاولة المطابقة بالتصنيف (مطابقة دقيقة)
     if classification in YOUTUBE_LINKS:
-        return YOUTUBE_LINKS[classification]
+        results.append(YOUTUBE_LINKS[classification])
     
-    # 2. محاولة المطابقة الجزئية للتصنيف (أكثر مرونة)
+    # 2. محاولة المطابقة الجزئية للتصنيف
     for key in YOUTUBE_LINKS.keys():
         if key in classification or classification in key:
-            return YOUTUBE_LINKS[key]
+            if YOUTUBE_LINKS[key] not in results:
+                results.append(YOUTUBE_LINKS[key])
     
-    # 3. محاولة المطابقة بالكلمات المفتاحية (مع دعم الكتابة بدون همزات)
+    # 3. حالة خاصة: إذا كان السؤال عن "إفراغ" نضيف كلا النوعين
+    if "افراغ" in user_message or "إفراغ" in user_message:
+        if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
+            بورصة = YOUTUBE_LINKS["إفراغ عقاري (بورصة)"]
+            if بورصة not in results:
+                results.append(بورصة)
+        if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
+            سجل_عقاري = YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"]
+            if سجل_عقاري not in results:
+                results.append(سجل_عقاري)
+    
+    # 4. محاولة المطابقة بالكلمات المفتاحية
     keywords_map = {
-        "إفراغ": "إفراغ عقاري (بورصة)",
-        "افراغ": "إفراغ عقاري (بورصة)",
-        "بورصة": "إفراغ عقاري (بورصة)",
         "سجل عقاري": "إفراغ عقاري (سجل عقاري)",
         "السجل العقاري": "إفراغ عقاري (سجل عقاري)",
+        "بورصة": "إفراغ عقاري (بورصة)",
         "تسجيل عيني": "تسجيل عيني",
         "تسجيل العقار": "تسجيل عيني",
         "وساطة": "عقد وساطة",
@@ -504,36 +517,26 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         "مستثمر": "عقد وساطة مع مستثمر",
         "مشتري": "عقد وساطة مع مستثمر",
         "مستأجر": "عقد وساطة مع مستثمر",
-        "وسيط ووسيط": "عقد وساطة بين وسطاء",
-        "شرح": "عقد وساطة",
-        "طريقة": "عقد وساطة",
-        "كيف": "عقد وساطة",
-        "اريد": "عقد وساطة",
-        "عقار": "إفراغ عقاري (بورصة)",
-        "عقاري": "إفراغ عقاري (بورصة)"
+        "وسيط ووسيط": "عقد وساطة بين وسطاء"
     }
     
     # تطبيع الرسالة (إزالة التشكيل والهمزات) للمقارنة بشكل أفضل
     normalized_message = user_message.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ة", "ه")
     
     for key, category in keywords_map.items():
-        # مقارنة مع النص الأصلي والنص المطبع
         key_normalized = key.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ة", "ه")
         if key in user_message or key_normalized in normalized_message:
             if category in YOUTUBE_LINKS:
-                return YOUTUBE_LINKS[category]
+                if YOUTUBE_LINKS[category] not in results:
+                    results.append(YOUTUBE_LINKS[category])
     
-    return None
-
-# ======================= دالة الحصول على روابط الإفراغ المزدوجة =======================
-def get_dual_feragh_links() -> dict:
-    """
-    ترجع روابط الإفراغ بكلا النوعين (البورصة والسجل العقاري) لعرضها معاً.
-    """
-    return {
-        "بورصة": YOUTUBE_LINKS.get("إفراغ عقاري (بورصة)"),
-        "سجل عقاري": YOUTUBE_LINKS.get("إفراغ عقاري (سجل عقاري)")
-    }
+    # إزالة التكرارات (الحفاظ على الترتيب)
+    unique_results = []
+    for item in results:
+        if item not in unique_results:
+            unique_results.append(item)
+    
+    return unique_results
 
 # ======================= البرومبت المختصر الجديد (مع عناوين واضحة) =======================
 BASE_SYSTEM_PROMPT = """
@@ -1108,79 +1111,36 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_q = context_data.get("last_question") if context_data else None
     last_summary = context_data.get("last_suggestion") if context_data else None
     classification = context_data.get("classification") if context_data else None
-    youtube_links_str = context_data.get("youtube_links") if context_data else ""
 
     # ====== زر "شرح باليوتيوب" ======
     if data == "show_youtube":
         import json
         
-        # حالة خاصة: إذا كان التصنيف "إفراغ عقاري" أو "إفراغ بالسجل العقاري" أو يحتوي السؤال على "افراغ"
-        is_feragh = (classification and ("إفراغ" in classification or "افراغ" in classification)) or ("افراغ" in last_q or "إفراغ" in last_q)
+        # الحصول على قائمة الروابط (قد تكون رابطاً واحداً أو عدة روابط)
+        youtube_links = get_youtube_links(classification, last_q)
         
-        if is_feragh:
-            # عرض كلا النوعين من الإفراغ
-            dual_links = get_dual_feragh_links()
-            msg = "📌 **شرح الإفراغ العقاري (كلا النوعين)**\n\n"
-            
-            بورصة = dual_links.get("بورصة")
-            سجل_عقاري = dual_links.get("سجل عقاري")
-            
-            if بورصة:
-                msg += f"**1. الإفراغ عبر البورصة العقارية:**\n"
-                msg += f"🔗 {بورصة['primary']}\n"
-                if بورصة.get('title'):
-                    msg += f"📖 {بورصة['title']}\n"
-                msg += "\n"
-            
-            if سجل_عقاري:
-                msg += f"**2. الإفراغ عبر السجل العقاري:**\n"
-                msg += f"🔗 {سجل_عقاري['primary']}\n"
-                if سجل_عقاري.get('secondary'):
-                    msg += "📌 روابط إضافية:\n"
-                    for i, link in enumerate(سجل_عقاري['secondary'], 1):
-                        msg += f"   {i}. {link}\n"
-                if سجل_عقاري.get('title'):
-                    msg += f"📖 {سجل_عقاري['title']}\n"
+        if youtube_links:
+            msg = "🎥 **شروحات بالفيديو:**\n\n"
+            for i, link in enumerate(youtube_links, 1):
+                msg += f"{i}. **{link.get('title', 'شرح')}**\n"
+                msg += f"   🔗 {link['primary']}\n"
+                if link.get('secondary'):
+                    for j, sec_link in enumerate(link['secondary'], 1):
+                        msg += f"      - رابط إضافي {j}: {sec_link}\n"
                 msg += "\n"
             
             if FOOTER.strip() not in msg:
                 msg += FOOTER
             await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=True))
-            return
-        
-        # إذا كانت البيانات المخزنة فارغة، نحاول البحث مرة أخرى باستخدام السؤال الأصلي
-        if not youtube_links_str and last_q:
-            logger.info(f"🔄 إعادة البحث عن روابط يوتيوب للسؤال: {last_q}")
-            youtube_data = get_youtube_links(classification, last_q)
-            if youtube_data:
-                youtube_links_str = json.dumps(youtube_data, ensure_ascii=False)
-                # تحديث السياق بالبيانات الجديدة
-                save_context(user_id, last_q, last_summary, "menu", classification, youtube_links_str)
-                logger.info(f"✅ تم العثور على روابط: {youtube_links_str}")
-        
-        if youtube_links_str:
-            try:
-                links = json.loads(youtube_links_str)
-                msg = f"🎥 **{links.get('title', 'شرح بالفيديو')}**\n\n"
-                msg += f"🔗 **الرابط الرئيسي:** {links['primary']}\n"
-                if links.get('secondary'):
-                    msg += "\n📌 **روابط إضافية:**\n"
-                    for i, link in enumerate(links['secondary'], 1):
-                        msg += f"{i}. {link}\n"
-                
-                if FOOTER.strip() not in msg:
-                    msg += FOOTER
-                await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=True))
-            except Exception as e:
-                logger.error(f"❌ خطأ في عرض الروابط: {e}")
-                await query.edit_message_text("❌ حدث خطأ في عرض الروابط.", reply_markup=get_main_keyboard())
         else:
             await query.edit_message_text("❌ لم أجد شرحاً بالفيديو لهذا الموضوع حالياً.", reply_markup=get_main_keyboard())
 
     # ====== زر "الرد المختصر" ======
     elif data == "show_summary":
         if last_summary:
-            has_youtube = bool(youtube_links_str)
+            # التحقق من وجود روابط يوتيوب
+            youtube_links = get_youtube_links(classification, last_q)
+            has_youtube = len(youtube_links) > 0
             await query.edit_message_text(last_summary, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد رداً مختصراً سابقاً. اطرح سؤالاً جديداً.")
@@ -1191,7 +1151,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "source")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            has_youtube = bool(youtube_links_str)
+            youtube_links = get_youtube_links(classification, last_q)
+            has_youtube = len(youtube_links) > 0
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
@@ -1201,7 +1162,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "requirements")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            has_youtube = bool(youtube_links_str)
+            youtube_links = get_youtube_links(classification, last_q)
+            has_youtube = len(youtube_links) > 0
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
@@ -1211,7 +1173,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "conditions")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            has_youtube = bool(youtube_links_str)
+            youtube_links = get_youtube_links(classification, last_q)
+            has_youtube = len(youtube_links) > 0
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
@@ -1221,7 +1184,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "steps")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            has_youtube = bool(youtube_links_str)
+            youtube_links = get_youtube_links(classification, last_q)
+            has_youtube = len(youtube_links) > 0
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
@@ -1231,7 +1195,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "procedures")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            has_youtube = bool(youtube_links_str)
+            youtube_links = get_youtube_links(classification, last_q)
+            has_youtube = len(youtube_links) > 0
             await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
@@ -1431,10 +1396,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"📊 التصنيف (من النموذج): {classification}")
 
     # ====== البحث عن روابط اليوتيوب المناسبة ======
-    youtube_data = get_youtube_links(classification, user_message)
-    has_youtube = youtube_data is not None
+    youtube_links = get_youtube_links(classification, user_message)
+    has_youtube = len(youtube_links) > 0
     import json
-    youtube_links_str = json.dumps(youtube_data, ensure_ascii=False) if youtube_data else ""
+    youtube_links_str = json.dumps(youtube_links, ensure_ascii=False) if youtube_links else ""
 
     # ====== توليد الرد المختصر ======
     try:
@@ -1596,7 +1561,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية + روابط اليوتيوب حسب التصنيف الذكي مع دعم الإفراغ المزدوج...")
+    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية + روابط اليوتيوب الموحدة للجميع...")
 
     # ======================= حل مشكلة Conflict =======================
     async def delete_webhook():
