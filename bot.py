@@ -198,7 +198,6 @@ def init_db():
         created_at TEXT
     )''')
     
-    # ====== إضافة الفهارس (Indexing) لتحسين الأداء ======
     c.execute("CREATE INDEX IF NOT EXISTS idx_context_user_session ON conversation_context (user_id, session_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log (user_id)")
@@ -1027,7 +1026,7 @@ def get_ai_summary_response(user_message: str, user_id: int = None) -> str:
     try:
         logger.info("⚡ توليد الرد المختصر...")
         response = client_groq.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",  # استخدام نموذج أصغر وأكثر استقراراً
             messages=[
                 {"role": "system", "content": enhanced_prompt},
                 {"role": "user", "content": user_message}
@@ -1041,7 +1040,7 @@ def get_ai_summary_response(user_message: str, user_id: int = None) -> str:
                 reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:**"
             return reply
     except Exception as e:
-        logger.warning(f"⚠️ فشل توليد الرد المختصر: {e}")
+        logger.warning(f"⚠️ فشل توليد الرد المختصر (Groq): {e}")
 
     try:
         logger.info("🔄 باستخدام Gemini للرد المختصر...")
@@ -1064,7 +1063,7 @@ def get_ai_summary_response(user_message: str, user_id: int = None) -> str:
 
     return "❌ عذراً، جميع خدمات الذكاء الاصطناعي غير متاحة حالياً. يرجى المحاولة لاحقاً."
 
-# ======================= توليد الأقسام التفصيلية =======================
+# ======================= توليد الأقسام التفصيلية (مُصلحة) =======================
 def get_section_response(user_message: str, section: str) -> str:
     section_prompts = {
         "source": """أعطِ فقط الاقتباسات الحرفية من المصادر الرسمية مع رابط كل مصدر.
@@ -1100,10 +1099,11 @@ def get_section_response(user_message: str, section: str) -> str:
 
 🔴 تذكير: ابحث في جميع المصادر الـ16 قبل الإجابة. إذا وجدت المعلومة ولو جزئياً، اذكرها مع المصدر. لا تقل "لم أجد" إلا بعد التأكد من جميع المصادر.
 """
+    # محاولة أولى باستخدام نموذج أصغر وأكثر استقراراً
     try:
-        logger.info(f"⚡ توليد قسم: {section}")
+        logger.info(f"⚡ توليد قسم: {section} (محاولة 1)")
         response = client_groq.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",  # نموذج أصغر وأقل عرضة للفشل
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
@@ -1114,11 +1114,14 @@ def get_section_response(user_message: str, section: str) -> str:
         reply = response.choices[0].message.content
         if not is_api_error(reply):
             return reply
+        else:
+            logger.warning(f"⚠️ استجابة API تحتوي على خطأ: {reply[:100]}")
     except Exception as e:
-        logger.warning(f"⚠️ فشل توليد القسم {section}: {e}")
+        logger.warning(f"⚠️ فشل توليد القسم {section} (Groq): {e}")
 
+    # محاولة ثانية باستخدام Gemini
     try:
-        logger.info(f"🔄 باستخدام Gemini للقسم {section}...")
+        logger.info(f"🔄 باستخدام Gemini للقسم {section} (محاولة 2)")
         response = client_gemini.chat.completions.create(
             model="gemini-2.5-flash",
             messages=[
@@ -1131,10 +1134,33 @@ def get_section_response(user_message: str, section: str) -> str:
         reply = response.choices[0].message.content
         if not is_api_error(reply):
             return reply
+        else:
+            logger.warning(f"⚠️ استجابة Gemini تحتوي على خطأ: {reply[:100]}")
     except Exception as e:
         logger.warning(f"⚠️ فشل Gemini للقسم {section}: {e}")
 
-    return f"❌ عذراً، لم أتمكن من استرجاع تفاصيل '{section}'. يرجى المحاولة لاحقاً، أو تحديث السؤال."
+    # محاولة ثالثة باستخدام OpenRouter إن وُجد
+    if client_openrouter:
+        try:
+            logger.info(f"🔄 باستخدام OpenRouter للقسم {section} (محاولة 3)")
+            response = client_openrouter.chat.completions.create(
+                model="meta-llama/llama-3.1-8b-instruct",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.2,
+                max_tokens=1200
+            )
+            reply = response.choices[0].message.content
+            if not is_api_error(reply):
+                return reply
+        except Exception as e:
+            logger.warning(f"⚠️ فشل OpenRouter للقسم {section}: {e}")
+
+    # إذا فشلت كل المحاولات، نعطي رداً احتياطياً من قاعدة البيانات إن وجد
+    # هنا يمكننا البحث في qa_cache عن سؤال مشابه، لكننا سنكتفي برسالة واضحة
+    return f"❌ عذراً، لم أتمكن من استرجاع تفاصيل '{section}' بسبب مشكلة في الاتصال بخدمات الذكاء الاصطناعي. يرجى المحاولة لاحقاً، أو استخدام الأزرار الأخرى."
 
 # ======================= دوال التأكيد بالرقم السري =======================
 pending_secret_requests = {}
@@ -1464,7 +1490,7 @@ async def clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_
 
     await request_secret_confirmation(update, context, "clear_all_rules", {})
 
-# ======================= أوامر المستخدم الجديدة =======================
+# ======================= أوامر المستخدم =======================
 async def saved_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     saved = get_saved_responses(user.id)
@@ -1527,8 +1553,9 @@ async def audit_log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"- [{r[3]}] {r[1]}: {safe_details}\n"
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
-# ======================= بناء لوحة المفاتيح التفاعلية (محدثة) =======================
-def get_main_keyboard(has_youtube: bool = False, has_save: bool = False, show_back: bool = False):
+# ======================= بناء لوحة المفاتيح التفاعلية (بدون الأزرار الجديدة) =======================
+def get_main_keyboard(has_youtube: bool = False, has_save: bool = False):
+    """إرجاع لوحة المفاتيح مع الأزرار الأساسية فقط (بدون عرض الكل، رجوع، مشاركة)."""
     keyboard = []
     
     if has_youtube:
@@ -1541,15 +1568,9 @@ def get_main_keyboard(has_youtube: bool = False, has_save: bool = False, show_ba
     keyboard.append([InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps"),
                      InlineKeyboardButton("🛠️ الإجراءات التنظيمية", callback_data="detail_procedures")])
     
-    keyboard.append([InlineKeyboardButton("📑 عرض الكل", callback_data="show_all")])
-    
+    # زر حفظ الرد (يبقى لأنه لم يُطلب إزالته)
     if has_save:
         keyboard.append([InlineKeyboardButton("💾 حفظ الرد", callback_data="save_response")])
-        keyboard.append([InlineKeyboardButton("📤 مشاركة الرد", callback_data="share_response")])
-    
-    # زر الرجوع (يظهر فقط عند الحاجة)
-    if show_back:
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="go_back")])
     
     keyboard.append([InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")])
     keyboard.append([InlineKeyboardButton("❓ هل هذه الإجابة مفيدة؟", callback_data="dummy_feedback")])
@@ -1558,7 +1579,7 @@ def get_main_keyboard(has_youtube: bool = False, has_save: bool = False, show_ba
     
     return InlineKeyboardMarkup(keyboard)
 
-# ======================= معالج الأزرار المحدث =======================
+# ======================= معالج الأزرار المحدث (بدون الأزرار الجديدة) =======================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1590,17 +1611,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(
                     msg,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=get_main_keyboard(has_youtube=True, has_save=True, show_back=True)
+                    reply_markup=get_main_keyboard(has_youtube=True, has_save=True)
                 )
             else:
                 await query.edit_message_text(
                     "❌ لم أجد شرحاً بالفيديو لهذا الموضوع حالياً.",
-                    reply_markup=get_main_keyboard(show_back=True)
+                    reply_markup=get_main_keyboard()
                 )
         else:
             await query.edit_message_text(
                 "❌ لم أجد شرحاً بالفيديو لهذا الموضوع حالياً.",
-                reply_markup=get_main_keyboard(show_back=True)
+                reply_markup=get_main_keyboard()
             )
 
     # ====== زر "الرد المختصر" ======
@@ -1616,82 +1637,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("لم أجد رداً مختصراً سابقاً. اطرح سؤالاً جديداً.")
 
-    # ====== زر "عرض الكل" ======
-    elif data == "show_all":
-        if last_q:
-            sections = ["source", "requirements", "conditions", "steps", "procedures"]
-            all_replies = []
-            for sec in sections:
-                reply = get_section_response(last_q, sec)
-                safe_reply = html.escape(reply)
-                all_replies.append(f"<b>📌 {sec.upper()}</b>\n{safe_reply}")
-            combined = "\n\n---\n\n".join(all_replies)
-            combined += FOOTER
-            has_youtube = len(youtube_links) > 0 if isinstance(youtube_links, list) else False
-            await query.edit_message_text(
-                combined,
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True, show_back=True)
-            )
-        else:
-            await query.edit_message_text("لم أجد سؤالاً سابقاً لعرض تفاصيله.")
-
-    # ====== زر "حفظ الرد" ======
-    elif data == "save_response":
-        if last_q and last_summary:
-            save_saved_response(user_id, last_q, last_summary)
-            await query.edit_message_text(
-                "✅ تم حفظ الرد بنجاح! يمكنك استعراضه لاحقاً باستخدام /saved",
-                reply_markup=get_main_keyboard(has_save=True)
-            )
-        else:
-            await query.edit_message_text("لا يوجد رد لحفظه حالياً.")
-
-    # ====== زر "مشاركة الرد" (جديد) ======
-    elif data == "share_response":
-        if last_q and last_summary:
-            safe_q = html.escape(last_q)
-            safe_a = html.escape(last_summary)
-            share_text = (
-                f"📌 <b>السؤال:</b>\n{safe_q}\n\n"
-                f"📝 <b>الإجابة:</b>\n{safe_a}\n\n"
-                f"---\n"
-                f"🤖 <b>شارك عبر بوت الخبير العقاري:</b>\n"
-                f"https://t.me/YourBotUsername"  # غيّر هذا إلى رابط البوت الخاص بك
-            )
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=share_text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True
-            )
-            await query.edit_message_text(
-                "✅ تم إرسال نص الرد للمشاركة في رسالة منفصلة (يمكنك نسخها وإعادة توجيهها).",
-                reply_markup=get_main_keyboard(has_save=True)
-            )
-        else:
-            await query.edit_message_text(
-                "لا يوجد رد للمشاركة حالياً. اسأل سؤالاً أولاً.",
-                reply_markup=get_main_keyboard()
-            )
-
-    # ====== زر "رجوع" (جديد) ======
-    elif data == "go_back":
-        if last_summary:
-            has_youtube = len(youtube_links) > 0 if isinstance(youtube_links, list) else False
-            safe_summary = html.escape(last_summary)
-            await query.edit_message_text(
-                safe_summary,
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True)
-            )
-        else:
-            await query.edit_message_text(
-                "🔙 تم الرجوع إلى القائمة الرئيسية.",
-                reply_markup=get_main_keyboard()
-            )
-
-    # ====== أزرار التفاصيل ======
+    # ====== أزرار التفاصيل (5 أقسام) ======
     elif data in ["detail_source", "detail_requirements", "detail_conditions", "detail_steps", "detail_procedures"]:
         section_map = {
             "detail_source": "source",
@@ -1709,10 +1655,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 safe_reply,
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True, show_back=True)
+                reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True)
             )
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً.")
+
+    # ====== زر "حفظ الرد" ======
+    elif data == "save_response":
+        if last_q and last_summary:
+            save_saved_response(user_id, last_q, last_summary)
+            await query.edit_message_text(
+                "✅ تم حفظ الرد بنجاح! يمكنك استعراضه لاحقاً باستخدام /saved",
+                reply_markup=get_main_keyboard(has_save=True)
+            )
+        else:
+            await query.edit_message_text("لا يوجد رد لحفظه حالياً.")
 
     # ====== زر "سؤال عقاري آخر" ======
     elif data == "ask_another":
@@ -2100,7 +2057,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بالنسخة المطورة النهائية (جميع التعديلات + HTML + أزرار المشاركة والرجوع) ...")
+    logger.info("✅ البوت العقاري يعمل بالنسخة النهائية (بدون أزرار عرض الكل، رجوع، مشاركة، مع إصلاح الأقسام).")
 
     async def delete_webhook():
         await app.bot.delete_webhook(drop_pending_updates=True)
