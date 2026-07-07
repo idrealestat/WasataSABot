@@ -1136,66 +1136,81 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if last_q is None:
             last_q = ""
         
-        # ====== تحليل السؤال مباشرة وعرض الروابط ======
+        # ========================================================
+        # التعديل الجذري: استخدام الروابط المخزنة أولاً
+        # ========================================================
         youtube_links = []
         
-        # 1. حالة الإفراغ (تعرض كلا النوعين)
-        if "افراغ" in last_q or "إفراغ" in last_q or "نقل ملكية" in last_q:
-            if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["إفراغ عقاري (بورصة)"])
-            if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"])
+        # 1. محاولة استرجاع الروابط المخزنة في السياق
+        stored_links_str = context_data.get("youtube_links") if context_data else ""
+        if stored_links_str:
+            try:
+                youtube_links = json.loads(stored_links_str)
+                logger.info(f"✅ تم استرجاع روابط مخزنة: {len(youtube_links)} رابط")
+            except json.JSONDecodeError:
+                logger.warning("⚠️ فشل تحليل الروابط المخزنة، سيتم إعادة الحساب")
+                youtube_links = []
         
-        # 2. حالة التسجيل العيني
-        elif "تسجيل عيني" in last_q or "تسجيل العقار" in last_q or "عينيا" in last_q:
-            if "تسجيل عيني" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["تسجيل عيني"])
-        
-        # 3. حالة عقود الوساطة
-        elif "وساطة" in last_q or "عقد وساطة" in last_q:
-            if "وسيط ووسيط" in last_q or "بين وسيط" in last_q:
-                if "عقد وساطة بين وسطاء" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["عقد وساطة بين وسطاء"])
-            elif "مستثمر" in last_q or "مشتري" in last_q or "مستأجر" in last_q:
-                if "عقد وساطة مع مستثمر" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["عقد وساطة مع مستثمر"])
-            else:
-                if "عقد وساطة" in YOUTUBE_LINKS:
-                    youtube_links.append(YOUTUBE_LINKS["عقد وساطة"])
-        
-        # 4. حالة عقد إيجار سكني
-        elif "إيجار سكني" in last_q or "ايجار سكني" in last_q:
-            if "عقد إيجار سكني" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["عقد إيجار سكني"])
-        
-        # 5. حالة عقد إيجار تجاري
-        elif "إيجار تجاري" in last_q or "ايجار تجاري" in last_q:
-            if "عقد إيجار تجاري" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["عقد إيجار تجاري"])
-        
-        # 6. حالة مزاد
-        elif "مزاد" in last_q or "ترخيص مزاد" in last_q:
-            if "ترخيص مزاد عقاري" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["ترخيص مزاد عقاري"])
-        
-        # 7. حالة مطالبة
-        elif "مطالبة" in last_q or "إخلاء" in last_q or "فسخ" in last_q:
-            if "مطالبة إيجار متأخر" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["مطالبة إيجار متأخر"])
-        
-        # 8. حالة عربون
-        elif "عربون" in last_q:
-            if "دفع العربون" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["دفع العربون"])
-        
-        # 9. حالة إنهاء عقد
-        elif "إنهاء عقد" in last_q or "انهاء عقد" in last_q:
-            if "إنهاء عقد إيجار" in YOUTUBE_LINKS:
-                youtube_links.append(YOUTUBE_LINKS["إنهاء عقد إيجار"])
-        
-        # 10. إذا لم يتم العثور على شيء، استخدام التصنيف كاحتياطي
-        if not youtube_links and classification:
-            youtube_links = get_youtube_links(classification, last_q)
+        # 2. إذا لم توجد روابط مخزنة، نلجأ إلى إعادة الحساب (احتياطي)
+        if not youtube_links and last_q:
+            logger.info("🔄 إعادة حساب الروابط (احتياطي)")
+            # 2.1 حالة الإفراغ (تعرض كلا النوعين)
+            if "افراغ" in last_q or "إفراغ" in last_q or "نقل ملكية" in last_q:
+                if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["إفراغ عقاري (بورصة)"])
+                if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"])
+            
+            # 2.2 حالة التسجيل العيني
+            elif "تسجيل عيني" in last_q or "تسجيل العقار" in last_q or "عينيا" in last_q:
+                if "تسجيل عيني" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["تسجيل عيني"])
+            
+            # 2.3 حالة عقود الوساطة
+            elif "وساطة" in last_q or "عقد وساطة" in last_q:
+                if "وسيط ووسيط" in last_q or "بين وسيط" in last_q:
+                    if "عقد وساطة بين وسطاء" in YOUTUBE_LINKS:
+                        youtube_links.append(YOUTUBE_LINKS["عقد وساطة بين وسطاء"])
+                elif "مستثمر" in last_q or "مشتري" in last_q or "مستأجر" in last_q:
+                    if "عقد وساطة مع مستثمر" in YOUTUBE_LINKS:
+                        youtube_links.append(YOUTUBE_LINKS["عقد وساطة مع مستثمر"])
+                else:
+                    if "عقد وساطة" in YOUTUBE_LINKS:
+                        youtube_links.append(YOUTUBE_LINKS["عقد وساطة"])
+            
+            # 2.4 حالة عقد إيجار سكني
+            elif "إيجار سكني" in last_q or "ايجار سكني" in last_q:
+                if "عقد إيجار سكني" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["عقد إيجار سكني"])
+            
+            # 2.5 حالة عقد إيجار تجاري
+            elif "إيجار تجاري" in last_q or "ايجار تجاري" in last_q:
+                if "عقد إيجار تجاري" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["عقد إيجار تجاري"])
+            
+            # 2.6 حالة مزاد
+            elif "مزاد" in last_q or "ترخيص مزاد" in last_q:
+                if "ترخيص مزاد عقاري" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["ترخيص مزاد عقاري"])
+            
+            # 2.7 حالة مطالبة
+            elif "مطالبة" in last_q or "إخلاء" in last_q or "فسخ" in last_q:
+                if "مطالبة إيجار متأخر" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["مطالبة إيجار متأخر"])
+            
+            # 2.8 حالة عربون
+            elif "عربون" in last_q:
+                if "دفع العربون" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["دفع العربون"])
+            
+            # 2.9 حالة إنهاء عقد
+            elif "إنهاء عقد" in last_q or "انهاء عقد" in last_q:
+                if "إنهاء عقد إيجار" in YOUTUBE_LINKS:
+                    youtube_links.append(YOUTUBE_LINKS["إنهاء عقد إيجار"])
+            
+            # 2.10 إذا لم يتم العثور على شيء، استخدام التصنيف كاحتياطي
+            if not youtube_links and classification:
+                youtube_links = get_youtube_links(classification, last_q)
         
         # عرض النتائج
         if youtube_links:
