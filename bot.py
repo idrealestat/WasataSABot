@@ -465,6 +465,14 @@ def get_youtube_links(classification: str, user_message: str) -> list:
     """
     results = []
     
+    # ====== التحقق من أن classification ليست None ======
+    if classification is None:
+        classification = ""
+    
+    # ====== التحقق من أن user_message ليست None ======
+    if user_message is None:
+        user_message = ""
+    
     # 1. محاولة المطابقة بالتصنيف (مطابقة دقيقة)
     if classification in YOUTUBE_LINKS:
         results.append(YOUTUBE_LINKS[classification])
