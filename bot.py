@@ -405,11 +405,11 @@ def get_all_rejections():
 
 # ======================= روابط اليوتيوب حسب التصنيف =======================
 YOUTUBE_LINKS = {
-    "إفراغ عقاري": {
+    "إفراغ عقاري (بورصة)": {
         "primary": "https://youtu.be/_0a2CbfFmMA",
         "title": "شرح طريقة الإفراغ العقاري عبر البورصة العقارية"
     },
-    "إفراغ بالسجل العقاري": {
+    "إفراغ عقاري (سجل عقاري)": {
         "primary": "https://youtu.be/P2ehPAcdtvg",
         "secondary": ["https://youtu.be/ERRSS-74TUA", "https://youtu.be/IVPIgNsQE4o"],
         "title": "شرح الافراغ بالسجل العقاري"
@@ -473,11 +473,11 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
     
     # 3. محاولة المطابقة بالكلمات المفتاحية (مع دعم الكتابة بدون همزات)
     keywords_map = {
-        "إفراغ": "إفراغ عقاري",
-        "افراغ": "إفراغ عقاري",
-        "بورصة": "إفراغ عقاري",
-        "نقل ملكية": "إفراغ بالسجل العقاري",
-        "سجل عقاري": "إفراغ بالسجل العقاري",
+        "إفراغ": "إفراغ عقاري (بورصة)",
+        "افراغ": "إفراغ عقاري (بورصة)",
+        "بورصة": "إفراغ عقاري (بورصة)",
+        "سجل عقاري": "إفراغ عقاري (سجل عقاري)",
+        "السجل العقاري": "إفراغ عقاري (سجل عقاري)",
         "تسجيل عيني": "تسجيل عيني",
         "تسجيل العقار": "تسجيل عيني",
         "وساطة": "عقد وساطة",
@@ -509,8 +509,8 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         "طريقة": "عقد وساطة",
         "كيف": "عقد وساطة",
         "اريد": "عقد وساطة",
-        "عقار": "إفراغ عقاري",
-        "عقاري": "إفراغ عقاري"
+        "عقار": "إفراغ عقاري (بورصة)",
+        "عقاري": "إفراغ عقاري (بورصة)"
     }
     
     # تطبيع الرسالة (إزالة التشكيل والهمزات) للمقارنة بشكل أفضل
@@ -524,6 +524,16 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
                 return YOUTUBE_LINKS[category]
     
     return None
+
+# ======================= دالة الحصول على روابط الإفراغ المزدوجة =======================
+def get_dual_feragh_links() -> dict:
+    """
+    ترجع روابط الإفراغ بكلا النوعين (البورصة والسجل العقاري) لعرضها معاً.
+    """
+    return {
+        "بورصة": YOUTUBE_LINKS.get("إفراغ عقاري (بورصة)"),
+        "سجل عقاري": YOUTUBE_LINKS.get("إفراغ عقاري (سجل عقاري)")
+    }
 
 # ======================= البرومبت المختصر الجديد (مع عناوين واضحة) =======================
 BASE_SYSTEM_PROMPT = """
@@ -603,21 +613,21 @@ def is_api_error(response_text: str) -> bool:
     ]
     return any(indicator.lower() in response_text.lower() for indicator in error_indicators)
 
-# ======================= التصنيف =======================
+# ======================= التصنيف (محسن) =======================
 def classify_question(user_message: str) -> str:
     try:
         response = client_groq.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": """صنف هذا السؤال العقاري إلى واحدة من هذه الفئات فقط:
-- 'عقد وساطة': عن عقود الوساطة
+- 'عقد وساطة': عن عقود الوساطة (مثل: عقد وساطة، وساطة عقارية، عمولة وساطة)
 - 'عقد وساطة مع مستثمر': عن وساطة مع مستثمر أو مشتري أو مستأجر
 - 'عقد وساطة بين وسطاء': عن وساطة بين وسيط ووسيط
-- 'عقد إيجار سكني': عن عقود الإيجار السكني
-- 'عقد إيجار تجاري': عن عقود الإيجار التجاري
-- 'تسجيل عيني': عن التسجيل العيني
-- 'إفراغ عقاري': عن الإفراغ العقاري أو البورصة العقارية
-- 'إفراغ بالسجل العقاري': عن الافراغ بالسجل العقاري
+- 'عقد إيجار سكني': عن عقود الإيجار السكني (مثل: إيجار سكني، عقد إيجار سكني)
+- 'عقد إيجار تجاري': عن عقود الإيجار التجاري (مثل: إيجار تجاري، عقد إيجار تجاري)
+- 'تسجيل عيني': عن التسجيل العيني في السجل العقاري (مثل: تسجيل عقار، تسجيل عيني، سجل عقاري)
+- 'إفراغ عقاري': عن الإفراغ العقاري أو البورصة العقارية (مثل: افراغ، إفراغ، نقل ملكية، بورصة)
+- 'إفراغ بالسجل العقاري': عن الافراغ عبر السجل العقاري (مثل: افراغ سجل عقاري، افراغ بالسجل)
 - 'إعلان': عن الإعلان في وسائل التواصل
 - 'ترخيص مزاد عقاري': عن تراخيص المزادات
 - 'مطالبة إيجار متأخر': عن المطالبة بالإيجار المتأخر والفسخ والإخلاء
@@ -625,6 +635,12 @@ def classify_question(user_message: str) -> str:
 - 'إنهاء عقد إيجار': عن إنهاء عقد الإيجار بالتراضي
 - 'طلب توضيح': يطلب شرحاً لرد سابق
 - 'سؤال عام': لأي سؤال عقاري آخر
+
+**تنبيه هام:** 
+- إذا كان السؤال يحتوي على كلمة "تسجيل" أو "عيني" أو "سجل عقاري"، فصنفه كـ 'تسجيل عيني'.
+- إذا كان السؤال يحتوي على كلمة "افراغ" أو "إفراغ" أو "بورصة" فقط (بدون ذكر "سجل عقاري")، فصنفه كـ 'إفراغ عقاري'.
+- إذا كان السؤال يحتوي على "افراغ" و "سجل عقاري" معاً، فصنفه كـ 'إفراغ بالسجل العقاري'.
+- إذا كان السؤال يحتوي على "وساطة" أو "عقد وساطة"، فصنفه كـ 'عقد وساطة'.
 
 أجب فقط باسم الفئة."""},
                 {"role": "user", "content": user_message}
@@ -1098,6 +1114,40 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "show_youtube":
         import json
         
+        # حالة خاصة: إذا كان التصنيف "إفراغ عقاري" أو "إفراغ بالسجل العقاري" أو يحتوي السؤال على "افراغ"
+        is_feragh = (classification and ("إفراغ" in classification or "افراغ" in classification)) or ("افراغ" in last_q or "إفراغ" in last_q)
+        
+        if is_feragh:
+            # عرض كلا النوعين من الإفراغ
+            dual_links = get_dual_feragh_links()
+            msg = "📌 **شرح الإفراغ العقاري (كلا النوعين)**\n\n"
+            
+            بورصة = dual_links.get("بورصة")
+            سجل_عقاري = dual_links.get("سجل عقاري")
+            
+            if بورصة:
+                msg += f"**1. الإفراغ عبر البورصة العقارية:**\n"
+                msg += f"🔗 {بورصة['primary']}\n"
+                if بورصة.get('title'):
+                    msg += f"📖 {بورصة['title']}\n"
+                msg += "\n"
+            
+            if سجل_عقاري:
+                msg += f"**2. الإفراغ عبر السجل العقاري:**\n"
+                msg += f"🔗 {سجل_عقاري['primary']}\n"
+                if سجل_عقاري.get('secondary'):
+                    msg += "📌 روابط إضافية:\n"
+                    for i, link in enumerate(سجل_عقاري['secondary'], 1):
+                        msg += f"   {i}. {link}\n"
+                if سجل_عقاري.get('title'):
+                    msg += f"📖 {سجل_عقاري['title']}\n"
+                msg += "\n"
+            
+            if FOOTER.strip() not in msg:
+                msg += FOOTER
+            await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=True))
+            return
+        
         # إذا كانت البيانات المخزنة فارغة، نحاول البحث مرة أخرى باستخدام السؤال الأصلي
         if not youtube_links_str and last_q:
             logger.info(f"🔄 إعادة البحث عن روابط يوتيوب للسؤال: {last_q}")
@@ -1343,9 +1393,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(cached_answer, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
         return
 
+    # ====== مرشح الكلمات المفتاحية قبل التصنيف ======
+    keyword_classification = None
+    if "افراغ" in user_message or "إفراغ" in user_message:
+        if "سجل عقاري" in user_message or "السجل العقاري" in user_message:
+            keyword_classification = "إفراغ بالسجل العقاري"
+        else:
+            keyword_classification = "إفراغ عقاري"
+    elif "تسجيل عيني" in user_message or "تسجيل العقار" in user_message or "تسجيل عقار" in user_message or "عينيا" in user_message:
+        keyword_classification = "تسجيل عيني"
+    elif "عقد وساطة" in user_message or "وساطة" in user_message or "وسيط" in user_message:
+        if "بين وسيط" in user_message or "وسيط ووسيط" in user_message:
+            keyword_classification = "عقد وساطة بين وسطاء"
+        elif "مستثمر" in user_message or "مشتري" in user_message or "مستأجر" in user_message:
+            keyword_classification = "عقد وساطة مع مستثمر"
+        else:
+            keyword_classification = "عقد وساطة"
+    elif "إيجار سكني" in user_message or "ايجار سكني" in user_message:
+        keyword_classification = "عقد إيجار سكني"
+    elif "إيجار تجاري" in user_message or "ايجار تجاري" in user_message:
+        keyword_classification = "عقد إيجار تجاري"
+    elif "مزاد" in user_message:
+        keyword_classification = "ترخيص مزاد عقاري"
+    elif "مطالبة" in user_message or "إخلاء" in user_message or "فسخ" in user_message:
+        keyword_classification = "مطالبة إيجار متأخر"
+    elif "عربون" in user_message:
+        keyword_classification = "دفع العربون"
+    elif "إنهاء عقد" in user_message or "انهاء عقد" in user_message or "إنهاء الإيجار" in user_message:
+        keyword_classification = "إنهاء عقد إيجار"
+
     # ====== التصنيف ======
-    classification = classify_question(user_message)
-    logger.info(f"📊 التصنيف: {classification}")
+    if keyword_classification:
+        classification = keyword_classification
+        logger.info(f"📊 التصنيف (من المرشح): {classification}")
+    else:
+        classification = classify_question(user_message)
+        logger.info(f"📊 التصنيف (من النموذج): {classification}")
 
     # ====== البحث عن روابط اليوتيوب المناسبة ======
     youtube_data = get_youtube_links(classification, user_message)
@@ -1513,7 +1596,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية + روابط اليوتيوب حسب التصنيف الذكي...")
+    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية + روابط اليوتيوب حسب التصنيف الذكي مع دعم الإفراغ المزدوج...")
 
     # ======================= حل مشكلة Conflict =======================
     async def delete_webhook():
