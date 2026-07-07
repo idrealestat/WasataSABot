@@ -462,11 +462,16 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
     """
     ترجع روابط اليوتيوب المناسبة حسب التصنيف أو حسب الكلمات المفتاحية في السؤال.
     """
-    # 1. محاولة المطابقة بالتصنيف
+    # 1. محاولة المطابقة بالتصنيف (مطابقة دقيقة)
     if classification in YOUTUBE_LINKS:
         return YOUTUBE_LINKS[classification]
     
-    # 2. محاولة المطابقة بالكلمات المفتاحية (للتغطية الأوسع)
+    # 2. محاولة المطابقة الجزئية للتصنيف (أكثر مرونة)
+    for key in YOUTUBE_LINKS.keys():
+        if key in classification or classification in key:
+            return YOUTUBE_LINKS[key]
+    
+    # 3. محاولة المطابقة بالكلمات المفتاحية
     keywords_map = {
         "إفراغ": "إفراغ عقاري",
         "بورصة": "إفراغ عقاري",
@@ -492,7 +497,10 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         "مستثمر": "عقد وساطة مع مستثمر",
         "مشتري": "عقد وساطة مع مستثمر",
         "مستأجر": "عقد وساطة مع مستثمر",
-        "وسيط ووسيط": "عقد وساطة بين وسطاء"
+        "وسيط ووسيط": "عقد وساطة بين وسطاء",
+        "شرح": "عقد وساطة",
+        "طريقة": "عقد وساطة",
+        "كيف": "عقد وساطة"
     }
     
     for key, category in keywords_map.items():
@@ -685,7 +693,7 @@ def get_ai_summary_response(user_message: str) -> str:
 
 # ======================= توليد الأقسام التفصيلية =======================
 def get_section_response(user_message: str, section: str) -> str:
-    """توليد رد تفصيلي لقسم معين (المصادر، المتطلبات، الشروط، الخطوات، الإجراءات)."""
+    """توليد رد تفصيلي لقسم معين (المصادر، المتطلبات، الشروط، الخطوات، الإجراءات التنظيمية)."""
     section_prompts = {
         "source": """أعطِ فقط الاقتباسات الحرفية من المصادر الرسمية مع رابط كل مصدر.
 - ابحث في المصادر الـ16.
@@ -705,10 +713,11 @@ def get_section_response(user_message: str, section: str) -> str:
 - اعتمد على المصادر الـ16.
 - اذكر كل خطوة مع مصدرها.
 - لا تكرر الشروط أو المتطلبات هنا.""",
-        "procedures": """أعطِ الإجراءات التفصيلية حسب السياق (مثل: آلية التقديم، الجهات المعنية، الجداول الزمنية) بشكل منظم.
-- اعتمد على المصادر الـ16.
-- اذكر كل إجراء مع مصدره.
-- لا تختلق معلومات."""
+        "procedures": """أعطِ فقط المعلومات المتعلقة بـ:
+1. **الجهات المعنية:** اذكر الجهات الرسمية المختصة (الهيئة العامة للعقار، منصة إيجار، السجل العقاري، البلديات، وزارة الإعلام) مع شرح مختصر عن دور كل جهة.
+2. **الرسوم والضرائب:** اذكر الرسوم المطلوبة (رسوم الهيئة، رسوم التوثيق، رسوم البلدية، الضرائب العقارية) مع المبالغ إن وجدت في المصادر الـ16.
+
+**تحذير:** لا تذكر أي معلومات عن وزارة العدل، الغرفة التجارية، البنوك، أو أي جهة غير مدرجة في المصادر الـ16. إذا لم تجد المعلومات في المصادر الـ16، اعتذر ولا تختلق."""
     }
     
     instruction = section_prompts.get(section, "أعطِ التفاصيل المطلوبة فقط مع المصادر.")
@@ -1047,7 +1056,7 @@ def get_main_keyboard(has_youtube: bool = False):
     keyboard.append([InlineKeyboardButton("📋 المتطلبات", callback_data="detail_requirements"),
                      InlineKeyboardButton("⚖️ الشروط", callback_data="detail_conditions")])
     keyboard.append([InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps"),
-                     InlineKeyboardButton("🛠️ الإجراءات", callback_data="detail_procedures")])
+                     InlineKeyboardButton("🛠️ الإجراءات التنظيمية", callback_data="detail_procedures")])
     
     # الأزرار السفلية
     keyboard.append([InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")])
