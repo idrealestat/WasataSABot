@@ -8,6 +8,7 @@ import re
 import json
 import hashlib
 import difflib
+import html
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -764,24 +765,25 @@ YOUTUBE_LINKS = {
     }
 }
 
-# ======================= دالة تنسيق روابط اليوتيوب (Markdown) =======================
+# ======================= دالة تنسيق روابط اليوتيوب (HTML) =======================
 def format_youtube_message(youtube_links):
     if not youtube_links:
         return None
-    msg = "🎥 *شروحات بالفيديو:*\n\n"
+    msg = "🎥 <b>شروحات بالفيديو:</b>\n\n"
     for i, link in enumerate(youtube_links, 1):
-        title = link.get('title', 'شرح')
-        primary = link.get('primary', '')
+        title = html.escape(link.get('title', 'شرح'))
+        primary = html.escape(link.get('primary', ''))
         secondary = link.get('secondary', [])
-        msg += f"{i}. *{title}*\n"
-        msg += f"   🔗 {primary}\n"
+        msg += f"{i}. <b>{title}</b>\n"
+        msg += f"   🔗 <a href='{primary}'>{primary}</a>\n"
         if secondary:
             for j, sec in enumerate(secondary, 1):
-                msg += f"      - رابط إضافي {j}: {sec}\n"
+                sec_escaped = html.escape(sec)
+                msg += f"      - رابط إضافي {j}: <a href='{sec_escaped}'>{sec_escaped}</a>\n"
         msg += "\n"
     return msg
 
-# ======================= دالة استرجاع روابط اليوتيوب المحسنة (مع إعادة شرط الإفراغ) =======================
+# ======================= دالة استرجاع روابط اليوتيوب المحسنة (مع شرط الإفراغ) =======================
 def get_youtube_links(classification: str, user_message: str = "") -> list:
     results = []
     if classification is None:
@@ -789,7 +791,7 @@ def get_youtube_links(classification: str, user_message: str = "") -> list:
     if user_message is None:
         user_message = ""
     
-    # ====== الشرط الخاص بالإفراغ (أُعيد من الكود الأصلي) ======
+    # ====== الشرط الخاص بالإفراغ ======
     if "افراغ" in user_message or "إفراغ" in user_message or "نقل ملكية" in user_message:
         if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
             results.append(YOUTUBE_LINKS["إفراغ عقاري (بورصة)"])
@@ -797,7 +799,6 @@ def get_youtube_links(classification: str, user_message: str = "") -> list:
             results.append(YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"])
         return results
     
-    # ====== المطابقة بالتصنيف والكلمات المفتاحية ======
     normalized_msg = normalize_arabic(user_message)
     
     if classification in YOUTUBE_LINKS:
@@ -855,38 +856,38 @@ def get_youtube_links(classification: str, user_message: str = "") -> list:
     
     return unique_results
 
-# ======================= البرومبت الأساسي (Markdown) =======================
+# ======================= البرومبت الأساسي (بتنسيق HTML) =======================
 BASE_SYSTEM_PROMPT = """
-أنت **خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
+أنت <b>خبير عقاري سعودي</b>، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
 
-🔴 **القاعدة الصفرية (الدور المطلق):**
+🔴 <b>القاعدة الصفرية (الدور المطلق):</b>
 أنت تعمل حصراً كخبير عقاري سعودي. الرد على أي سؤال غير عقاري هو: "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
 
-🔴 **تحديد المصطلحات (إلزامي):**
-- كلمة "مزاد" في سياق هذا البوت تعني **"المزاد العقاري"** فقط، وهو عملية بيع وشراء العقارات عبر المزاد العلني.
-- كلمة "ترخيص مزاد" تعني **"ترخيص المزاد العقاري"** الصادر عن الهيئة العامة للعقار.
-- أي سؤال يحتوي على "مزاد" أو "ترخيص مزاد" يُفهم على أنه عن **المزاد العقاري** وليس عن أي نوع آخر من المزادات (مثل مزاد السيارات، المزادات الحكومية، إلخ).
+🔴 <b>تحديد المصطلحات (إلزامي):</b>
+- كلمة "مزاد" في سياق هذا البوت تعني <b>"المزاد العقاري"</b> فقط، وهو عملية بيع وشراء العقارات عبر المزاد العلني.
+- كلمة "ترخيص مزاد" تعني <b>"ترخيص المزاد العقاري"</b> الصادر عن الهيئة العامة للعقار.
+- أي سؤال يحتوي على "مزاد" أو "ترخيص مزاد" يُفهم على أنه عن <b>المزاد العقاري</b> وليس عن أي نوع آخر من المزادات (مثل مزاد السيارات، المزادات الحكومية، إلخ).
 - إذا كان السؤال عن "مظاد" أو "صيد" أو أي مصطلح غير عقاري، يجب الرد بالجملة الثابتة: "أنا مختص بالشأن العقاري السعودي فقط. هل لديك سؤال عقاري؟"
 
-🔴 **مهمتك الآن:**
-قدّم **رداً مختصراً شاملاً** يحتوي على الأقسام التالية بوضوح (مع عناوينها):
-1. **الجهة المعنية:** (مثل: الهيئة العامة للعقار، وزارة الإعلام، البلدية).
-2. **الحكم:** (نعم/لا/مسموح/ممنوع).
-3. **مختصر الشروط:** (أهم الشروط القانونية مختصرة، وليست مفصلة).
-4. **مختصر المتطلبات:** (أهم المستندات والتراخيص مختصرة).
-5. **مختصر الخطوات:** (أهم الخطوات العملية مختصرة).
+🔴 <b>مهمتك الآن:</b>
+قدّم <b>رداً مختصراً شاملاً</b> يحتوي على الأقسام التالية بوضوح (مع عناوينها):
+1. <b>الجهة المعنية:</b> (مثل: الهيئة العامة للعقار، وزارة الإعلام، البلدية).
+2. <b>الحكم:</b> (نعم/لا/مسموح/ممنوع).
+3. <b>مختصر الشروط:</b> (أهم الشروط القانونية مختصرة، وليست مفصلة).
+4. <b>مختصر المتطلبات:</b> (أهم المستندات والتراخيص مختصرة).
+5. <b>مختصر الخطوات:</b> (أهم الخطوات العملية مختصرة).
 
-**🔴 تعليمات البحث الإلزامية (يجب تنفيذها بدقة):**
+<b>🔴 تعليمات البحث الإلزامية (يجب تنفيذها بدقة):</b>
 - المصادر الـ16 المذكورة أدناه هي مصدرك الوحيد.
-- **يجب أن تبحث فعلياً في هذه المصادر** ولا تكتفي بالقول "لم أجد معلومات".
+- <b>يجب أن تبحث فعلياً في هذه المصادر</b> ولا تكتفي بالقول "لم أجد معلومات".
 - إذا كان السؤال عن التراخيص → ابحث في الهيئة العامة للعقار (المصدر 1) ووزارة الإعلام (المصدر 5).
 - إذا كان السؤال عن الإيجار → ابحث في منصة إيجار (المصدر 2).
 - إذا كان السؤال عن التسجيل العيني → ابحث في السجل العقاري (المصدر 15).
 - إذا كان السؤال عن الوساطة → ابحث في نظام الوساطة (المصدر 10).
 - إذا كان السؤال عن النطاقات الجغرافية → ابحث في بوابة النطاقات (المصدر 16).
 - إذا كان السؤال عن المزاد العقاري أو ترخيص مزاد → ابحث في الهيئة العامة للعقار (المصدر 1).
-- **إذا وجدت المعلومة في أي مصدر، اذكرها ولو كانت جزئية. لا تقل "لم أجد" إلا بعد التأكد من جميع المصادر.**
-- **إذا لم تجد المعلومة في المصادر الـ16، اعتذر بصدق ولا تختلق معلومات من معرفتك العامة.**
+- <b>إذا وجدت المعلومة في أي مصدر، اذكرها ولو كانت جزئية. لا تقل "لم أجد" إلا بعد التأكد من جميع المصادر.</b>
+- <b>إذا لم تجد المعلومة في المصادر الـ16، اعتذر بصدق ولا تختلق معلومات من معرفتك العامة.</b>
 
 ## المصادر المعتمدة (16 مصدراً):
 [النوع الأول – الرسمية والتشريعية]
@@ -909,12 +910,12 @@ BASE_SYSTEM_PROMPT = """
 .16 بوابة النطاقات الجغرافية (saudiproperties.rega.gov.sa/zones)
 
 ## التنسيق المطلوب:
-- ابدأ بـ "📌 **الإجابة المختصرة:**"
+- ابدأ بـ "📌 <b>الإجابة المختصرة:</b>"
 - ثم اذكر الأقسام الخمسة بالترتيب مع عناوينها كما هو مطلوب أعلاه.
 - لا تذكر التفاصيل الكاملة (الشروط التفصيلية، المتطلبات الكاملة، الخطوات التفصيلية) هنا.
-- **بعد الإجابة، أضف سطراً فارغاً، ثم هذا النص بالخط العريض:**
+- <b>بعد الإجابة، أضف سطراً فارغاً، ثم هذا النص بالخط العريض:</b>
   
-**🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:**
+<b>🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:</b>
 
 عند بدء التشغيل: "تفضل: هل لديك سؤال عقاري؟"
 """
@@ -923,12 +924,12 @@ BASE_SYSTEM_PROMPT = """
 FOOTER = """
 
 -------
-**تمت بدعم من:** 
-*سلطان آل ناجد العسيري*
+<b>تمت بدعم من:</b> 
+<i>سلطان آل ناجد العسيري</i>
 المرجع المعلوماتي للوسيط العقاري
 https://linktr.ee/sultan.al3siry
-*(كدعم معلوماتي وتطبيقي للوسطاء العقاريين من خلال المصادر الرسمية، وليس استشارة استثمارية أو قانونية أو ترخيصاً.)*
-**"الوسيط هو المسؤول الوحيد عن امتثال أعماله للأنظمة والتشريعات السعودية"**
+<i>(كدعم معلوماتي وتطبيقي للوسطاء العقاريين من خلال المصادر الرسمية، وليس استشارة استثمارية أو قانونية أو ترخيصاً.)</i>
+<b>"الوسيط هو المسؤول الوحيد عن امتثال أعماله للأنظمة والتشريعات السعودية"</b>
 """
 
 # ======================= دوال الذكاء الاصطناعي =======================
@@ -1024,11 +1025,11 @@ def get_ai_summary_response(user_message: str, user_id: int = None) -> str:
     if user_id:
         prefs = get_user_preferences(user_id)
         if prefs:
-            preferences = f"\n\n**تفضيلات المستخدم:** المدينة: {prefs['city'] or 'غير محدد'}, نوع العقار: {prefs['property_type'] or 'غير محدد'}, النطاق السعري: {prefs['price_range'] or 'غير محدد'}.\nيمكنك تخصيص الرد بناءً على هذه التفضيلات إذا كانت ذات صلة."
+            preferences = f"\n\n<b>تفضيلات المستخدم:</b> المدينة: {prefs['city'] or 'غير محدد'}, نوع العقار: {prefs['property_type'] or 'غير محدد'}, النطاق السعري: {prefs['price_range'] or 'غير محدد'}.\nيمكنك تخصيص الرد بناءً على هذه التفضيلات إذا كانت ذات صلة."
 
     enhanced_prompt = base_prompt + preferences + """
 
-🔴 **تذكير إضافي:** 
+🔴 <b>تذكير إضافي:</b> 
 - المصادر الـ16 هي مرجعك الوحيد.
 - ابحث فيها جميعاً، واستخرج المعلومات حتى لو كانت جزئية.
 - إذا وجدت معلومة في مصدر ميداني (مثل عقار، حراج)، اذكرها مع تحذير "مصدر ميداني".
@@ -1051,7 +1052,7 @@ def get_ai_summary_response(user_message: str, user_id: int = None) -> str:
         reply = response.choices[0].message.content
         if not is_api_error(reply):
             if "🔍 اختر من الأزرار أدناه" not in reply:
-                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:**"
+                reply = reply + "\n\n<b>🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:</b>"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل توليد الرد المختصر (Groq): {e}")
@@ -1070,7 +1071,7 @@ def get_ai_summary_response(user_message: str, user_id: int = None) -> str:
         reply = response.choices[0].message.content
         if not is_api_error(reply):
             if "🔍 اختر من الأزرار أدناه" not in reply:
-                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:**"
+                reply = reply + "\n\n<b>🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:</b>"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل Gemini: {e}")
@@ -1099,10 +1100,10 @@ def get_section_response(user_message: str, section: str) -> str:
 - اذكر كل خطوة مع مصدرها.
 - لا تكرر الشروط أو المتطلبات هنا.""",
         "procedures": """أعطِ فقط المعلومات المتعلقة بـ:
-1. **الجهات المعنية:** اذكر الجهات الرسمية المختصة (الهيئة العامة للعقار، منصة إيجار، السجل العقاري، البلديات، وزارة الإعلام) مع شرح مختصر عن دور كل جهة.
-2. **الرسوم والضرائب:** اذكر الرسوم المطلوبة (رسوم الهيئة، رسوم التوثيق، رسوم البلدية، الضرائب العقارية) مع المبالغ إن وجدت في المصادر الـ16.
+1. <b>الجهات المعنية:</b> اذكر الجهات الرسمية المختصة (الهيئة العامة للعقار، منصة إيجار، السجل العقاري، البلديات، وزارة الإعلام) مع شرح مختصر عن دور كل جهة.
+2. <b>الرسوم والضرائب:</b> اذكر الرسوم المطلوبة (رسوم الهيئة، رسوم التوثيق، رسوم البلدية، الضرائب العقارية) مع المبالغ إن وجدت في المصادر الـ16.
 
-**تحذير:** لا تذكر أي معلومات عن وزارة العدل، الغرفة التجارية، البنوك، أو أي جهة غير مدرجة في المصادر الـ16. إذا لم تجد المعلومات في المصادر الـ16، اعتذر ولا تختلق."""
+<b>تحذير:</b> لا تذكر أي معلومات عن وزارة العدل، الغرفة التجارية، البنوك، أو أي جهة غير مدرجة في المصادر الـ16. إذا لم تجد المعلومات في المصادر الـ16، اعتذر ولا تختلق."""
     }
     instruction = section_prompts.get(section, "أعطِ التفاصيل المطلوبة فقط مع المصادر.")
     system_prompt = f"""
@@ -1187,10 +1188,10 @@ async def request_secret_confirmation(update: Update, context: ContextTypes.DEFA
         "timestamp": datetime.now()
     }
     await update.message.reply_text(
-        f"⚠️ *تأكيد الأمان:*\n"
-        f"أنت على وشك تنفيذ أمر حساس: `{action}`.\n"
+        f"⚠️ <b>تأكيد الأمان:</b>\n"
+        f"أنت على وشك تنفيذ أمر حساس: <code>{action}</code>.\n"
         f"الرجاء إدخال الرقم السري الخاص بك لتأكيد العملية.",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.HTML
     )
 
 async def handle_secret_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1321,11 +1322,11 @@ async def admins_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("لا يوجد مدراء مسجلون.")
         return
 
-    msg = "📋 *قائمة المدراء:*\n\n"
+    msg = "📋 <b>قائمة المدراء:</b>\n\n"
     for a in admins:
         role = a[5] if len(a) > 5 else "admin"
         msg += f"- @{a[1]} (دور: {role})\n"
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def set_admin_role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1409,11 +1410,11 @@ async def list_rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("لا توجد قواعد مخصصة.")
         return
 
-    msg = "📋 *قائمة القواعد المخصصة:*\n\n"
+    msg = "📋 <b>قائمة القواعد المخصصة:</b>\n\n"
     for r in rules:
         status = "✅ (نشطة)" if r[5] == 1 else "⏸ (غير نشطة)"
-        msg += f"- *{r[1]}* {status}\n"
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+        msg += f"- <b>{r[1]}</b> {status}\n"
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def show_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1433,7 +1434,7 @@ async def show_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ لم أجد قاعدة باسم '{rule_name}'.")
         return
 
-    await update.message.reply_text(f"📜 *نص القاعدة '{rule_name}':*\n\n{rule_text}", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(f"📜 <b>نص القاعدة '{rule_name}':</b>\n\n{rule_text}", parse_mode=ParseMode.HTML)
 
 async def activate_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1507,12 +1508,14 @@ async def saved_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not saved:
         await update.message.reply_text("ليس لديك أي ردود محفوظة.")
         return
-    msg = "📚 *الردود المحفوظة:*\n\n"
+    msg = "📚 <b>الردود المحفوظة:</b>\n\n"
     for s in saved[:10]:
-        msg += f"*{s[1]}*\n{s[2][:100]}...\n\n"
+        safe_q = html.escape(s[1])
+        safe_a = html.escape(s[2][:100])
+        msg += f"<b>{safe_q}</b>\n{safe_a}...\n\n"
     if len(saved) > 10:
         msg += f"... و {len(saved)-10} ردود أخرى."
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def save_response_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1555,10 +1558,11 @@ async def audit_log_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("لا يوجد سجل للعمليات.")
         return
-    msg = "📋 *سجل العمليات الإدارية (آخر 20):*\n\n"
+    msg = "📋 <b>سجل العمليات الإدارية (آخر 20):</b>\n\n"
     for r in rows:
-        msg += f"- [{r[3]}] {r[1]}: {r[2]}\n"
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+        safe_details = html.escape(r[2])
+        msg += f"- [{r[3]}] {r[1]}: {safe_details}\n"
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 # ======================= بناء لوحة المفاتيح التفاعلية =======================
 def get_main_keyboard(has_youtube: bool = False, has_save: bool = False):
@@ -1615,7 +1619,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += FOOTER
                 await query.edit_message_text(
                     msg,
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                     reply_markup=get_main_keyboard(has_youtube=True, has_save=True)
                 )
             else:
@@ -1633,9 +1637,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "show_summary":
         if last_summary:
             has_youtube = len(youtube_links) > 0 if isinstance(youtube_links, list) else False
+            safe_summary = html.escape(last_summary)
             await query.edit_message_text(
-                last_summary,
-                parse_mode=ParseMode.MARKDOWN,
+                safe_summary,
+                parse_mode=ParseMode.HTML,
                 reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True)
             )
         else:
@@ -1653,11 +1658,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         section = section_map.get(data)
         if last_q and section:
             reply = get_section_response(last_q, section)
-            reply += FOOTER
+            safe_reply = html.escape(reply)
+            safe_reply += FOOTER
             has_youtube = len(youtube_links) > 0 if isinstance(youtube_links, list) else False
             await query.edit_message_text(
-                reply,
-                parse_mode=ParseMode.MARKDOWN,
+                safe_reply,
+                parse_mode=ParseMode.HTML,
                 reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True)
             )
         else:
@@ -1696,21 +1702,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ====== زر "النطاقات الجغرافية" ======
     elif data == "zones":
         zones_msg = """
-🗺️ *النطاقات الجغرافية الجديدة (تحديث 2026)*
+🗺️ <b>النطاقات الجغرافية الجديدة (تحديث 2026)</b>
 
-🔗 *المرجع الرسمي:* https://saudiproperties.rega.gov.sa/zones
+🔗 <b>المرجع الرسمي:</b> https://saudiproperties.rega.gov.sa/zones
 
-📌 *المناطق المذكورة (13):*
+📌 <b>المناطق المذكورة (13):</b>
 الرياض، مكة، المدينة، القصيم، الشرقية، عسير، تبوك، حائل، الحدود الشمالية، جازان، نجران، الباحة، الجوف.
 
-🏗️ *المشاريع المذكورة:*
+🏗️ <b>المشاريع المذكورة:</b>
 • نيوم، البحر الأحمر، أمالا
 • الرياض: القدية، المربع الجديد، المسار الرياضي، بوابة الدرعية، حديقة الملك سلمان، سدرة، كافد، مطار الملك سلمان
 • جدة: أبتاون، العروس، وسط جدة
 • مكة: أبراج مكة، المنار، برج أجياد، بوابة الملك سلمان، جبل عمر، ذاخر مكة
 • المدينة: الغرة، المهوى، دار الهجرة، داون تاون المدينة
 
-⚖️ *قواعد أساسية:*
+⚖️ <b>قواعد أساسية:</b>
 • التملك داخل النطاقات المذكورة فقط
 • مكة والمدينة: للمسلمين فقط
 • الرياض وجدة: مناطق محددة
@@ -1720,7 +1726,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
         await query.edit_message_text(
             zones_msg,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=get_main_keyboard()
         )
 
@@ -1777,24 +1783,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     msg = f"""
-📊 *إحصائيات البوت:*
+📊 <b>إحصائيات البوت:</b>
 ━━━━━━━━━━━━━━━━━━━
-🟢 *المستخدمين الحاليين (آخر 5 دقائق):* {stats['active_now']}
-📈 *النشطين (آخر 7 أيام):* {stats['active_week']}
-📊 *جميع المستخدمين (منذ البداية):* {stats['total_users']}
+🟢 <b>المستخدمين الحاليين (آخر 5 دقائق):</b> {stats['active_now']}
+📈 <b>النشطين (آخر 7 أيام):</b> {stats['active_week']}
+📊 <b>جميع المستخدمين (منذ البداية):</b> {stats['total_users']}
 ━━━━━━━━━━━━━━━━━━━
 
 🔒 تطمن، لا يمكن لأحد الاطلاع على محادثاتك.
 خصوصيتك أمانة في أعناقنا.
 
-📢 *للتواصل مع المسؤول:*
+📢 <b>للتواصل مع المسؤول:</b>
 - /report للإبلاغ عن مشكلة
 - /suggest لتقديم اقتراح
 - /complain لتقديم شكوى
 
-❓ *سم طال عمرك.. هل لديك سؤال عقاري؟*
+❓ <b>سم طال عمرك.. هل لديك سؤال عقاري؟</b>
 """
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1831,14 +1837,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     faq_answer = get_faq_answer(normalized)
     if faq_answer:
         logger.info(f"✅ تم الاسترجاع من FAQ لـ: {user_message}")
-        await update.message.reply_text(faq_answer, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        await update.message.reply_text(faq_answer, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
         return
 
     # Cache
     cached = get_semantic_cached_answer(user_message)
     if cached:
         logger.info(f"✅ تم الاسترجاع من التخزين المؤقت الدلالي لـ: {user_message}")
-        await update.message.reply_text(cached, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+        await update.message.reply_text(cached, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard())
         return
 
     # Keyword classification
@@ -1899,20 +1905,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if show_header:
             stats = get_stats()
             header = f"""
-🏠 *مرحباً بعودتك إلى بوت الخبير العقاري!*
+🏠 <b>مرحباً بعودتك إلى بوت الخبير العقاري!</b>
 
-👥 *عدد المستخدمين الحالي:* {stats['total_users']}
-📊 *آخر تحديث:* {datetime.now().strftime('%Y-%m-%d')}
+👥 <b>عدد المستخدمين الحالي:</b> {stats['total_users']}
+📊 <b>آخر تحديث:</b> {datetime.now().strftime('%Y-%m-%d')}
 """
             await update.message.reply_text(
                 header + reply,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True)
             )
         else:
             await update.message.reply_text(
                 reply,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=get_main_keyboard(has_youtube=has_youtube, has_save=True)
             )
 
@@ -1930,19 +1936,19 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats()
     top_q = "\n".join([f"- {q[0]}: {q[1]} مرة" for q in stats["top_questions"]]) if stats["top_questions"] else "لا توجد أسئلة مسجلة."
     msg = f"""
-📊 *إحصائيات البوت العقاري*
+📊 <b>إحصائيات البوت العقاري</b>
 
-👥 *إجمالي المستخدمين:* {stats['total_users']}
-🟢 *نشطاء آخر 7 أيام:* {stats['active_week']}
-🟢 *نشطاء الآن (آخر 5 دقائق):* {stats['active_now']}
-💬 *إجمالي الرسائل:* {stats['total_messages']}
-🚫 *حالات الرفض:* {stats['total_rejections']}
-📉 *معدل الرفض:* {stats['rejection_rate']}%
+👥 <b>إجمالي المستخدمين:</b> {stats['total_users']}
+🟢 <b>نشطاء آخر 7 أيام:</b> {stats['active_week']}
+🟢 <b>نشطاء الآن (آخر 5 دقائق):</b> {stats['active_now']}
+💬 <b>إجمالي الرسائل:</b> {stats['total_messages']}
+🚫 <b>حالات الرفض:</b> {stats['total_rejections']}
+📉 <b>معدل الرفض:</b> {stats['rejection_rate']}%
 
-🔥 *أكثر 5 أسئلة تكراراً:*
+🔥 <b>أكثر 5 أسئلة تكراراً:</b>
 {top_q}
 """
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1954,8 +1960,8 @@ async def top_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not keywords:
         await update.message.reply_text("لا توجد كلمات مفتاحية مسجلة.")
         return
-    msg = "🔑 *أكثر 10 كلمات مفتاحية استخداماً:*\n" + "\n".join([f"- {kw[0]}: {kw[1]} مرة" for kw in keywords])
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    msg = "🔑 <b>أكثر 10 كلمات مفتاحية استخداماً:</b>\n" + "\n".join([f"- {kw[0]}: {kw[1]} مرة" for kw in keywords])
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1967,14 +1973,14 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not users:
         await update.message.reply_text("لا يوجد مستخدمون مسجلون.")
         return
-    msg = f"👥 *إجمالي المستخدمين:* {len(users)}\n\n"
+    msg = f"👥 <b>إجمالي المستخدمين:</b> {len(users)}\n\n"
     for u in users[:20]:
         username = u[1] or "بدون اسم"
         first_name = u[2] or ""
         msg += f"- @{username} ({first_name}) - رسائل: {u[4]}\n"
     if len(users) > 20:
         msg += f"\n... و {len(users)-20} مستخدمين آخرين."
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1995,7 +2001,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     failed_count = 0
     for u in users:
         try:
-            await context.bot.send_message(chat_id=u[0], text=f"📢 *إعلان من المسؤول:*\n\n{broadcast_text}", parse_mode=ParseMode.MARKDOWN)
+            safe_text = html.escape(broadcast_text)
+            await context.bot.send_message(chat_id=u[0], text=f"📢 <b>إعلان من المسؤول:</b>\n\n{safe_text}", parse_mode=ParseMode.HTML)
             sent_count += 1
         except Exception as e:
             logger.warning(f"فشل إرسال لـ {u[0]}: {e}")
@@ -2059,7 +2066,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بالنسخة النهائية (مع إعادة شرط الإفراغ + Markdown للتنسيق).")
+    logger.info("✅ البوت العقاري يعمل بالنسخة النهائية (HTML + شرط الإفراغ).")
 
     async def delete_webhook():
         await app.bot.delete_webhook(drop_pending_updates=True)
