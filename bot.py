@@ -69,7 +69,9 @@ def init_db():
         last_question TEXT,
         last_suggestion TEXT,
         last_question_time TEXT,
-        clarification_stage TEXT DEFAULT 'menu'
+        clarification_stage TEXT DEFAULT 'menu',
+        classification TEXT DEFAULT '',
+        youtube_links TEXT DEFAULT ''
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS admins (
         user_id INTEGER PRIMARY KEY,
@@ -163,19 +165,19 @@ def save_rejection(question_text):
     conn.commit()
     conn.close()
 
-def save_context(user_id, last_question, last_suggestion, clarification_stage="menu"):
+def save_context(user_id, last_question, last_suggestion, clarification_stage="menu", classification="", youtube_links=""):
     conn = get_db_connection()
     c = conn.cursor()
     now = datetime.now().isoformat()
-    c.execute('''INSERT OR REPLACE INTO conversation_context (user_id, last_question, last_suggestion, last_question_time, clarification_stage)
-                 VALUES (?, ?, ?, ?, ?)''', (user_id, last_question, last_suggestion, now, clarification_stage))
+    c.execute('''INSERT OR REPLACE INTO conversation_context (user_id, last_question, last_suggestion, last_question_time, clarification_stage, classification, youtube_links)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)''', (user_id, last_question, last_suggestion, now, clarification_stage, classification, youtube_links))
     conn.commit()
     conn.close()
 
 def get_context(user_id):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute('''SELECT last_question, last_suggestion, last_question_time, clarification_stage FROM conversation_context
+    c.execute('''SELECT last_question, last_suggestion, last_question_time, clarification_stage, classification, youtube_links FROM conversation_context
                  WHERE user_id = ?''', (user_id,))
     row = c.fetchone()
     conn.close()
@@ -184,7 +186,9 @@ def get_context(user_id):
             "last_question": row[0],
             "last_suggestion": row[1],
             "last_question_time": row[2],
-            "clarification_stage": row[3] if row[3] else "menu"
+            "clarification_stage": row[3] if row[3] else "menu",
+            "classification": row[4] if row[4] else "",
+            "youtube_links": row[5] if row[5] else ""
         }
     return None
 
@@ -399,6 +403,105 @@ def get_all_rejections():
     conn.close()
     return rows
 
+# ======================= روابط اليوتيوب حسب التصنيف =======================
+YOUTUBE_LINKS = {
+    "إفراغ عقاري": {
+        "primary": "https://youtu.be/_0a2CbfFmMA",
+        "title": "شرح طريقة الإفراغ العقاري عبر البورصة العقارية"
+    },
+    "إفراغ بالسجل العقاري": {
+        "primary": "https://youtu.be/P2ehPAcdtvg",
+        "secondary": ["https://youtu.be/ERRSS-74TUA", "https://youtu.be/IVPIgNsQE4o"],
+        "title": "شرح الافراغ بالسجل العقاري"
+    },
+    "تسجيل عيني": {
+        "primary": "https://youtu.be/bnuACgiKPv8",
+        "secondary": ["https://youtu.be/dGHLinBQ8Pc"],
+        "title": "شرح التسجيل العيني أو تسجيل العقار عينياً"
+    },
+    "عقد وساطة": {
+        "primary": "https://youtu.be/VcAZkaevjRg",
+        "title": "شرح عمل عقد وساطة"
+    },
+    "عقد وساطة مع مستثمر": {
+        "primary": "https://youtu.be/sKopwc3byYs",
+        "title": "شرح عمل عقد وساطة مع مستثمر أو مشتري أو مستأجر"
+    },
+    "عقد وساطة بين وسطاء": {
+        "primary": "https://youtu.be/VcAZkaevjRg",
+        "title": "شرح عمل عقد وساطة بين وسيط ووسيط"
+    },
+    "عقد إيجار سكني": {
+        "primary": "https://youtu.be/kGN4zp0NDho",
+        "title": "شرح طريقة إنشاء عقد إيجار سكني بالتفاصيل"
+    },
+    "عقد إيجار تجاري": {
+        "primary": "https://youtu.be/M1a6oLV5y6g",
+        "title": "شرح طريقة إنشاء عقد إيجار تجاري بالتفاصيل"
+    },
+    "ترخيص مزاد عقاري": {
+        "primary": "https://youtu.be/fY7BxNYE1MY",
+        "title": "شرح طريقة طلب ترخيص مزاد عقاري"
+    },
+    "مطالبة إيجار متأخر": {
+        "primary": "https://youtu.be/RgoYAtTsb-g",
+        "title": "شرح طريقة المطالبة بالإيجار المتأخر وفسخ العقد وإخلاء العقار"
+    },
+    "دفع العربون": {
+        "primary": "https://youtu.be/xUZQod_vRpQ",
+        "title": "شرح طريقة دفع العربون عبر منصة الهيئة العامة للعقار"
+    },
+    "إنهاء عقد إيجار": {
+        "primary": "https://youtu.be/KMbtdGtbKjo",
+        "title": "شرح طريقة إنهاء عقد إيجار بالتراضي بين المؤجر والمستأجر"
+    }
+}
+
+# ======================= دالة استرجاع روابط اليوتيوب =======================
+def get_youtube_links(classification: str, user_message: str) -> dict:
+    """
+    ترجع روابط اليوتيوب المناسبة حسب التصنيف أو حسب الكلمات المفتاحية في السؤال.
+    """
+    # 1. محاولة المطابقة بالتصنيف
+    if classification in YOUTUBE_LINKS:
+        return YOUTUBE_LINKS[classification]
+    
+    # 2. محاولة المطابقة بالكلمات المفتاحية (للتغطية الأوسع)
+    keywords_map = {
+        "إفراغ": "إفراغ عقاري",
+        "بورصة": "إفراغ عقاري",
+        "نقل ملكية": "إفراغ بالسجل العقاري",
+        "سجل عقاري": "إفراغ بالسجل العقاري",
+        "تسجيل عيني": "تسجيل عيني",
+        "تسجيل العقار": "تسجيل عيني",
+        "وساطة": "عقد وساطة",
+        "عقد وساطة": "عقد وساطة",
+        "وسيط": "عقد وساطة",
+        "إيجار سكني": "عقد إيجار سكني",
+        "عقد إيجار سكني": "عقد إيجار سكني",
+        "إيجار تجاري": "عقد إيجار تجاري",
+        "عقد إيجار تجاري": "عقد إيجار تجاري",
+        "مزاد": "ترخيص مزاد عقاري",
+        "ترخيص مزاد": "ترخيص مزاد عقاري",
+        "مطالبة": "مطالبة إيجار متأخر",
+        "إخلاء": "مطالبة إيجار متأخر",
+        "فسخ": "مطالبة إيجار متأخر",
+        "عربون": "دفع العربون",
+        "إنهاء عقد": "إنهاء عقد إيجار",
+        "إنهاء الإيجار": "إنهاء عقد إيجار",
+        "مستثمر": "عقد وساطة مع مستثمر",
+        "مشتري": "عقد وساطة مع مستثمر",
+        "مستأجر": "عقد وساطة مع مستثمر",
+        "وسيط ووسيط": "عقد وساطة بين وسطاء"
+    }
+    
+    for key, category in keywords_map.items():
+        if key in user_message:
+            if category in YOUTUBE_LINKS:
+                return YOUTUBE_LINKS[category]
+    
+    return None
+
 # ======================= البرومبت المختصر الجديد (مع عناوين واضحة) =======================
 BASE_SYSTEM_PROMPT = """
 أنت **خبير عقاري سعودي**، ملم بالأنظمة العقارية السعودية والمصادر الرسمية والميدانية.
@@ -450,7 +553,7 @@ BASE_SYSTEM_PROMPT = """
 - لا تذكر التفاصيل الكاملة (الشروط التفصيلية، المتطلبات الكاملة، الخطوات التفصيلية) هنا.
 - **بعد الإجابة، أضف سطراً فارغاً، ثم هذا النص بالخط العريض:**
   
-**🔍 اختر من الأزرار أدناه للحصول على التفاصيل:**
+**🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:**
 
 عند بدء التشغيل: "تفضل: هل لديك سؤال عقاري؟"
 """
@@ -485,9 +588,18 @@ def classify_question(user_message: str) -> str:
             messages=[
                 {"role": "system", "content": """صنف هذا السؤال العقاري إلى واحدة من هذه الفئات فقط:
 - 'عقد وساطة': عن عقود الوساطة
-- 'عقد إيجار': عن عقود الإيجار
+- 'عقد وساطة مع مستثمر': عن وساطة مع مستثمر أو مشتري أو مستأجر
+- 'عقد وساطة بين وسطاء': عن وساطة بين وسيط ووسيط
+- 'عقد إيجار سكني': عن عقود الإيجار السكني
+- 'عقد إيجار تجاري': عن عقود الإيجار التجاري
 - 'تسجيل عيني': عن التسجيل العيني
+- 'إفراغ عقاري': عن الإفراغ العقاري أو البورصة العقارية
+- 'إفراغ بالسجل العقاري': عن الافراغ بالسجل العقاري
 - 'إعلان': عن الإعلان في وسائل التواصل
+- 'ترخيص مزاد عقاري': عن تراخيص المزادات
+- 'مطالبة إيجار متأخر': عن المطالبة بالإيجار المتأخر والفسخ والإخلاء
+- 'دفع العربون': عن دفع العربون
+- 'إنهاء عقد إيجار': عن إنهاء عقد الإيجار بالتراضي
 - 'طلب توضيح': يطلب شرحاً لرد سابق
 - 'سؤال عام': لأي سؤال عقاري آخر
 
@@ -495,7 +607,7 @@ def classify_question(user_message: str) -> str:
                 {"role": "user", "content": user_message}
             ],
             temperature=0.1,
-            max_tokens=20
+            max_tokens=30
         )
         classification = response.choices[0].message.content.strip()
         logger.info(f"📊 التصنيف: {classification}")
@@ -540,13 +652,12 @@ def get_ai_summary_response(user_message: str) -> str:
                 {"role": "user", "content": user_message}
             ],
             temperature=0.2,
-            max_tokens=700  # زيادة طفيفة لإعطاء مساحة للعناوين الخمسة
+            max_tokens=700
         )
         reply = response.choices[0].message.content
         if not is_api_error(reply):
-            # التأكد من وجود الفاصل المطلوب
             if "🔍 اختر من الأزرار أدناه" not in reply:
-                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل:**"
+                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:**"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل توليد الرد المختصر: {e}")
@@ -565,7 +676,7 @@ def get_ai_summary_response(user_message: str) -> str:
         reply = response.choices[0].message.content
         if not is_api_error(reply):
             if "🔍 اختر من الأزرار أدناه" not in reply:
-                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل:**"
+                reply = reply + "\n\n**🔍 اختر من الأزرار أدناه للحصول على التفاصيل أو الشرح بالفيديو:**"
             return reply
     except Exception as e:
         logger.warning(f"⚠️ فشل Gemini: {e}")
@@ -921,27 +1032,29 @@ async def clear_all_rules_command(update: Update, context: ContextTypes.DEFAULT_
 
     await request_secret_confirmation(update, context, "clear_all_rules", {})
 
-# ======================= بناء لوحة المفاتيح التفاعلية (بالترتيب المطلوب) =======================
-def get_main_keyboard():
-    """إرجاع لوحة المفاتيح بالترتيب: صفوف متجانسة (زرين) ثم الأزرار السفلية."""
-    keyboard = [
-        # الصف الأول: الرد المختصر + التفاصيل من المصادر
-        [InlineKeyboardButton("📌 الرد المختصر", callback_data="show_summary"),
-         InlineKeyboardButton("📄 التفاصيل من المصادر", callback_data="detail_source")],
-        # الصف الثاني: المتطلبات + الشروط
-        [InlineKeyboardButton("📋 المتطلبات", callback_data="detail_requirements"),
-         InlineKeyboardButton("⚖️ الشروط", callback_data="detail_conditions")],
-        # الصف الثالث: الخطوات + الإجراءات
-        [InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps"),
-         InlineKeyboardButton("🛠️ الإجراءات", callback_data="detail_procedures")],
-        # الصف الرابع: سؤال عقاري آخر (زر واحد في المنتصف أو كامل العرض)
-        [InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")],
-        # الصف الخامس: زر وهمي (لا يؤدي إلى شيء)
-        [InlineKeyboardButton("❓ هل هذه الإجابة مفيدة؟", callback_data="dummy_feedback")],
-        # الصف السادس: نعم / لا (متجانبان)
-        [InlineKeyboardButton("✅ نعم", callback_data="feedback_yes"),
-         InlineKeyboardButton("❌ لا", callback_data="feedback_no")]
-    ]
+# ======================= بناء لوحة المفاتيح التفاعلية =======================
+def get_main_keyboard(has_youtube: bool = False):
+    """إرجاع لوحة المفاتيح بالترتيب: زر اليوتيوب (إن وجد) ثم صفوف متجانسة (زرين) ثم الأزرار السفلية."""
+    keyboard = []
+    
+    # زر اليوتيوب (يظهر فقط إذا كان هناك رابط مناسب)
+    if has_youtube:
+        keyboard.append([InlineKeyboardButton("🎥 شرح باليوتيوب", callback_data="show_youtube")])
+    
+    # الأزرار الرئيسية
+    keyboard.append([InlineKeyboardButton("📌 الرد المختصر", callback_data="show_summary"),
+                     InlineKeyboardButton("📄 التفاصيل من المصادر", callback_data="detail_source")])
+    keyboard.append([InlineKeyboardButton("📋 المتطلبات", callback_data="detail_requirements"),
+                     InlineKeyboardButton("⚖️ الشروط", callback_data="detail_conditions")])
+    keyboard.append([InlineKeyboardButton("📝 الخطوات", callback_data="detail_steps"),
+                     InlineKeyboardButton("🛠️ الإجراءات", callback_data="detail_procedures")])
+    
+    # الأزرار السفلية
+    keyboard.append([InlineKeyboardButton("❓ سؤال عقاري آخر", callback_data="ask_another")])
+    keyboard.append([InlineKeyboardButton("❓ هل هذه الإجابة مفيدة؟", callback_data="dummy_feedback")])
+    keyboard.append([InlineKeyboardButton("✅ نعم", callback_data="feedback_yes"),
+                     InlineKeyboardButton("❌ لا", callback_data="feedback_no")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 # ======================= معالج الأزرار =======================
@@ -954,12 +1067,35 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context_data = get_context(user_id)
     last_q = context_data.get("last_question") if context_data else None
     last_summary = context_data.get("last_suggestion") if context_data else None
+    classification = context_data.get("classification") if context_data else None
+    youtube_links_str = context_data.get("youtube_links") if context_data else ""
+
+    # ====== زر "شرح باليوتيوب" ======
+    if data == "show_youtube":
+        if youtube_links_str:
+            import json
+            try:
+                links = json.loads(youtube_links_str)
+                msg = f"🎥 **{links.get('title', 'شرح بالفيديو')}**\n\n"
+                msg += f"🔗 **الرابط الرئيسي:** {links['primary']}\n"
+                if links.get('secondary'):
+                    msg += "\n📌 **روابط إضافية:**\n"
+                    for i, link in enumerate(links['secondary'], 1):
+                        msg += f"{i}. {link}\n"
+                
+                if FOOTER.strip() not in msg:
+                    msg += FOOTER
+                await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=True))
+            except:
+                await query.edit_message_text("❌ حدث خطأ في عرض الروابط.", reply_markup=get_main_keyboard())
+        else:
+            await query.edit_message_text("❌ لم أجد شرحاً بالفيديو لهذا الموضوع حالياً.", reply_markup=get_main_keyboard())
 
     # ====== زر "الرد المختصر" ======
-    if data == "show_summary":
+    elif data == "show_summary":
         if last_summary:
-            # نعرض الملخص المخزن مع لوحة المفاتيح نفسها
-            await query.edit_message_text(last_summary, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            has_youtube = bool(youtube_links_str)
+            await query.edit_message_text(last_summary, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد رداً مختصراً سابقاً. اطرح سؤالاً جديداً.")
 
@@ -969,7 +1105,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "source")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            has_youtube = bool(youtube_links_str)
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
 
@@ -978,7 +1115,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "requirements")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            has_youtube = bool(youtube_links_str)
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
 
@@ -987,7 +1125,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "conditions")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            has_youtube = bool(youtube_links_str)
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
 
@@ -996,7 +1135,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "steps")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            has_youtube = bool(youtube_links_str)
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
 
@@ -1005,14 +1145,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = get_section_response(last_q, "procedures")
             if FOOTER.strip() not in reply.strip():
                 reply = reply + FOOTER
-            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            has_youtube = bool(youtube_links_str)
+            await query.edit_message_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
             await query.edit_message_text("لم أجد سؤالاً سابقاً لتقديم تفاصيل عنه. اطرح سؤالاً جديداً.")
 
     # ====== زر "سؤال عقاري آخر" ======
     elif data == "ask_another":
         clear_context(user_id)
-        # إرسال رسالة جديدة بدلاً من تعديل الرسالة الحالية
         await context.bot.send_message(
             chat_id=user_id,
             text="تفضل طال عمرك.. هل لديك سؤال عقاري آخر؟",
@@ -1022,12 +1162,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📞 الدعم واتساب", url="https://wa.me/966568708086")]
             ])
         )
-        # نغلق أزرار الرسالة الحالية
         await query.edit_message_reply_markup(reply_markup=None)
 
     # ====== زر وهمي (لا يؤدي إلى شيء) ======
     elif data == "dummy_feedback":
-        # لا نقوم بأي شيء، فقط نمنع ظهور خطأ
         pass
 
     # ====== زر "النطاقات الجغرافية" ======
@@ -1065,7 +1203,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             answer = context_data.get("last_suggestion") if context_data else None
             if answer:
                 save_cached_answer(last_q, answer, "المصادر الرسمية")
-            # إرسال رسالة جديدة
             await context.bot.send_message(
                 chat_id=user_id,
                 text="شكراً! تم حفظ هذه الإجابة للاستخدام المستقبلي.\n\nسم طال عمرك.. هل عندك سؤال عقاري آخر؟",
@@ -1174,6 +1311,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     classification = classify_question(user_message)
     logger.info(f"📊 التصنيف: {classification}")
 
+    # ====== البحث عن روابط اليوتيوب المناسبة ======
+    youtube_data = get_youtube_links(classification, user_message)
+    has_youtube = youtube_data is not None
+    import json
+    youtube_links_str = json.dumps(youtube_data, ensure_ascii=False) if youtube_data else ""
+
     # ====== توليد الرد المختصر ======
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -1189,8 +1332,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if FOOTER.strip() not in reply.strip():
             reply = reply + FOOTER
 
-        # حفظ السياق (السؤال الأصلي والرد المختصر)
-        save_context(user_id, user_message, reply)
+        # حفظ السياق (السؤال الأصلي، الرد المختصر، التصنيف، روابط اليوتيوب)
+        save_context(user_id, user_message, reply, "menu", classification, youtube_links_str)
 
         if show_header:
             stats = get_stats()
@@ -1200,9 +1343,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 👥 **عدد المستخدمين الحالي:** {stats['total_users']}
 📊 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d')}
 """
-            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            await update.message.reply_text(header + reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
         else:
-            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
+            await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=has_youtube))
 
     except Exception as e:
         logger.error(f"❌ خطأ في handle_message: {e}")
@@ -1334,7 +1477,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية (ترتيب جديد)...")
+    logger.info("✅ البوت العقاري يعمل بنظام الرد المختصر + الأزرار التفاعلية + روابط اليوتيوب حسب التصنيف الذكي...")
 
     # ======================= حل مشكلة Conflict =======================
     async def delete_webhook():
