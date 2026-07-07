@@ -473,6 +473,14 @@ def get_youtube_links(classification: str, user_message: str) -> list:
     if user_message is None:
         user_message = ""
     
+    # ====== حالة خاصة: الإفراغ ======
+    if "افراغ" in user_message or "إفراغ" in user_message or "نقل ملكية" in user_message:
+        if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
+            results.append(YOUTUBE_LINKS["إفراغ عقاري (بورصة)"])
+        if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
+            results.append(YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"])
+        return results
+    
     # 1. محاولة المطابقة بالتصنيف (مطابقة دقيقة)
     if classification in YOUTUBE_LINKS:
         results.append(YOUTUBE_LINKS[classification])
@@ -482,17 +490,6 @@ def get_youtube_links(classification: str, user_message: str) -> list:
         if key in classification or classification in key:
             if YOUTUBE_LINKS[key] not in results:
                 results.append(YOUTUBE_LINKS[key])
-    
-    # 3. حالة خاصة: إذا كان السؤال عن "إفراغ" نضيف كلا النوعين
-    if "افراغ" in user_message or "إفراغ" in user_message:
-        if "إفراغ عقاري (بورصة)" in YOUTUBE_LINKS:
-            بورصة = YOUTUBE_LINKS["إفراغ عقاري (بورصة)"]
-            if بورصة not in results:
-                results.append(بورصة)
-        if "إفراغ عقاري (سجل عقاري)" in YOUTUBE_LINKS:
-            سجل_عقاري = YOUTUBE_LINKS["إفراغ عقاري (سجل عقاري)"]
-            if سجل_عقاري not in results:
-                results.append(سجل_عقاري)
     
     # 4. محاولة المطابقة بالكلمات المفتاحية
     keywords_map = {
