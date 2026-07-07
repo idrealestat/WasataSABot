@@ -457,7 +457,7 @@ YOUTUBE_LINKS = {
     }
 }
 
-# ======================= دالة استرجاع روابط اليوتيوب =======================
+# ======================= دالة استرجاع روابط اليوتيوب (محسنة) =======================
 def get_youtube_links(classification: str, user_message: str) -> dict:
     """
     ترجع روابط اليوتيوب المناسبة حسب التصنيف أو حسب الكلمات المفتاحية في السؤال.
@@ -471,9 +471,10 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         if key in classification or classification in key:
             return YOUTUBE_LINKS[key]
     
-    # 3. محاولة المطابقة بالكلمات المفتاحية
+    # 3. محاولة المطابقة بالكلمات المفتاحية (مع دعم الكتابة بدون همزات)
     keywords_map = {
         "إفراغ": "إفراغ عقاري",
+        "افراغ": "إفراغ عقاري",
         "بورصة": "إفراغ عقاري",
         "نقل ملكية": "إفراغ بالسجل العقاري",
         "سجل عقاري": "إفراغ بالسجل العقاري",
@@ -483,9 +484,13 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         "عقد وساطة": "عقد وساطة",
         "وسيط": "عقد وساطة",
         "إيجار سكني": "عقد إيجار سكني",
+        "ايجار سكني": "عقد إيجار سكني",
         "عقد إيجار سكني": "عقد إيجار سكني",
+        "عقد ايجار سكني": "عقد إيجار سكني",
         "إيجار تجاري": "عقد إيجار تجاري",
+        "ايجار تجاري": "عقد إيجار تجاري",
         "عقد إيجار تجاري": "عقد إيجار تجاري",
+        "عقد ايجار تجاري": "عقد إيجار تجاري",
         "مزاد": "ترخيص مزاد عقاري",
         "ترخيص مزاد": "ترخيص مزاد عقاري",
         "مطالبة": "مطالبة إيجار متأخر",
@@ -493,7 +498,9 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         "فسخ": "مطالبة إيجار متأخر",
         "عربون": "دفع العربون",
         "إنهاء عقد": "إنهاء عقد إيجار",
+        "انهاء عقد": "إنهاء عقد إيجار",
         "إنهاء الإيجار": "إنهاء عقد إيجار",
+        "انهاء الايجار": "إنهاء عقد إيجار",
         "مستثمر": "عقد وساطة مع مستثمر",
         "مشتري": "عقد وساطة مع مستثمر",
         "مستأجر": "عقد وساطة مع مستثمر",
@@ -503,8 +510,13 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         "كيف": "عقد وساطة"
     }
     
+    # تطبيع الرسالة (إزالة التشكيل والهمزات) للمقارنة بشكل أفضل
+    normalized_message = user_message.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ة", "ه")
+    
     for key, category in keywords_map.items():
-        if key in user_message:
+        # مقارنة مع النص الأصلي والنص المطبع
+        key_normalized = key.replace("إ", "ا").replace("أ", "ا").replace("آ", "ا").replace("ة", "ه")
+        if key in user_message or key_normalized in normalized_message:
             if category in YOUTUBE_LINKS:
                 return YOUTUBE_LINKS[category]
     
@@ -1095,7 +1107,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if FOOTER.strip() not in msg:
                     msg += FOOTER
                 await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(has_youtube=True))
-            except:
+            except Exception as e:
+                logger.error(f"❌ خطأ في عرض الروابط: {e}")
                 await query.edit_message_text("❌ حدث خطأ في عرض الروابط.", reply_markup=get_main_keyboard())
         else:
             await query.edit_message_text("❌ لم أجد شرحاً بالفيديو لهذا الموضوع حالياً.", reply_markup=get_main_keyboard())
