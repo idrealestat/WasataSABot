@@ -507,7 +507,10 @@ def get_youtube_links(classification: str, user_message: str) -> dict:
         "وسيط ووسيط": "عقد وساطة بين وسطاء",
         "شرح": "عقد وساطة",
         "طريقة": "عقد وساطة",
-        "كيف": "عقد وساطة"
+        "كيف": "عقد وساطة",
+        "اريد": "عقد وساطة",
+        "عقار": "إفراغ عقاري",
+        "عقاري": "إفراغ عقاري"
     }
     
     # تطبيع الرسالة (إزالة التشكيل والهمزات) للمقارنة بشكل أفضل
@@ -1093,8 +1096,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ====== زر "شرح باليوتيوب" ======
     if data == "show_youtube":
+        import json
+        
+        # إذا كانت البيانات المخزنة فارغة، نحاول البحث مرة أخرى باستخدام السؤال الأصلي
+        if not youtube_links_str and last_q:
+            logger.info(f"🔄 إعادة البحث عن روابط يوتيوب للسؤال: {last_q}")
+            youtube_data = get_youtube_links(classification, last_q)
+            if youtube_data:
+                youtube_links_str = json.dumps(youtube_data, ensure_ascii=False)
+                # تحديث السياق بالبيانات الجديدة
+                save_context(user_id, last_q, last_summary, "menu", classification, youtube_links_str)
+                logger.info(f"✅ تم العثور على روابط: {youtube_links_str}")
+        
         if youtube_links_str:
-            import json
             try:
                 links = json.loads(youtube_links_str)
                 msg = f"🎥 **{links.get('title', 'شرح بالفيديو')}**\n\n"
